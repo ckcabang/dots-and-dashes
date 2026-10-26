@@ -9,10 +9,12 @@
 
 <h1>Future Log</h1>
 
+{% if refused %}<p role="alert">{{ refused }}</p>{% endif %}
+
 <form method="post" action="/future/entries">
-  <input name="text" aria-label="New entry" autocomplete="off" autofocus required pattern=".*\S.*">
-  <input type="month" name="month" aria-label="Month" min="{{ first_month.strftime('%Y-%m') }}" value="{{ first_month.strftime('%Y-%m') }}" required>
-  <input type="date" name="date" aria-label="Date (optional)" min="{{ first_month.isoformat() }}">
+  <input name="text" aria-label="New entry" value="{{ typed.text if typed else '' }}" autocomplete="off" autofocus required pattern=".*\S.*">
+  <input type="month" name="month" aria-label="Month" min="{{ first_month.strftime('%Y-%m') }}" value="{{ typed.month if typed else first_month.strftime('%Y-%m') }}" required>
+  <input type="date" name="date" aria-label="Date (optional)" min="{{ first_month.isoformat() }}" value="{{ typed.on or '' if typed else '' }}">
   <button>Add</button>
 </form>
 

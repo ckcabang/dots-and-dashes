@@ -110,7 +110,9 @@ def test_triage_places_a_capture_on_the_current_months_task_list():
 
 @pytest.mark.parametrize("month", [date(2026, 9, 1), date(2026, 11, 1)])
 def test_a_capture_goes_only_on_the_current_months_task_list(month):
-    with pytest.raises(journal.PlacementError, match="only on the current month's task list"):
+    # The refusal says how to proceed: a month left in the field picks another month.
+    reason = "only on the current month's task list: clear the Future Log month"
+    with pytest.raises(journal.PlacementError, match=reason):
         journal.triage(
             _capture("renew passport"), to=journal.Destination.monthly_log(month), today=TODAY
         )

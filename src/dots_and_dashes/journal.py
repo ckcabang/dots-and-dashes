@@ -1,7 +1,7 @@
 """The Journal domain module: every bullet journal rule, with no I/O."""
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, time, tzinfo
 from enum import StrEnum
 
@@ -124,22 +124,87 @@ def log_entry(text: str, *, on: date) -> NewEntry:
     )
 
 
-def daily_log_order(entries: list[Entry]) -> list[Entry]:
-    """Order a Daily Log's Entries, given in the order they were logged.
+class TimedEntryMoveError(ValueError):
+    """Raised when a Timed Entry is dragged; it moves only by changing its time."""
 
-    Timed Entries run in chronological order. Each untimed Entry stays after
-    its Anchor, the Timed Entry logged most recently before it; untimed
-    Entries logged before any Timed Entry stay at the top.
-    """
+
+class UntimedEntryError(ValueError):
+    """Raised when changing the time of an Entry that has none."""
+
+
+def _anchored_groups(entries: list[Entry]) -> tuple[list[Entry], list[list[Entry]]]:
+    """Split Entries in manual order into the untimed ones at the top of the day
+    and groups each led by a Timed Entry, followed by the Entries Anchored to it."""
     groups: list[list[Entry]] = [[]]
     for entry in entries:
         if entry.time is not None:
             groups.append([])
         groups[-1].append(entry)
-    top, anchored = groups[0], groups[1:]
-    # sorted() is stable, so Anchors at the same time keep their logged order.
+    return groups[0], groups[1:]
+
+
+def _in_order(top: list[Entry], anchored: list[list[Entry]]) -> list[Entry]:
+    # sorted() is stable, so Anchors at the same time keep their manual order.
     anchored = sorted(anchored, key=lambda group: group[0].time or time.min)
     return top + [entry for group in anchored for entry in group]
+
+
+def daily_log_order(entries: list[Entry]) -> list[Entry]:
+    """Order a Daily Log's Entries, given in their manual order.
+
+    Timed Entries run in chronological order. Each untimed Entry stays after
+    its Anchor, the nearest Timed Entry before it in manual order; untimed
+    Entries before any Timed Entry stay at the top. Storing the result as the
+    new manual order leaves it unchanged.
+    """
+    return _in_order(*_anchored_groups(entries))
+
+
+def _find(entries: list[Entry], entry_id: int) -> Entry:
+    for entry in entries:
+        if entry.id == entry_id:
+            return entry
+    raise LookupError(f"no Entry {entry_id} on this Daily Log")
+
+
+def anchor(entries: list[Entry], entry_id: int) -> Entry | None:
+    """The Anchor of an Entry: the nearest Timed Entry above it, if it is untimed."""
+    found: Entry | None = None
+    for entry in daily_log_order(entries):
+        if entry.id == entry_id:
+            return None if entry.time is not None else found
+        if entry.time is not None:
+            found = entry
+    raise LookupError(f"no Entry {entry_id} on this Daily Log")
+
+
+def change_time(entries: list[Entry], entry_id: int, *, to: time) -> list[Entry]:
+    """Give a Timed Entry a new time; the Entries Anchored to it move with it.
+
+    Returns the Daily Log's Entries in their new order. A Timed Entry moved to
+    a time another already has goes after it.
+    """
+    if _find(entries, entry_id).time is None:
+        raise UntimedEntryError("only a Timed Entry's time can be changed")
+    top, anchored = _anchored_groups(daily_log_order(entries))
+    moving = next(group for group in anchored if group[0].id == entry_id)
+    others = [group for group in anchored if group is not moving]
+    moved = [replace(moving[0], time=to), *moving[1:]]
+    return _in_order(top, [*others, moved])
+
+
+def move_entry(entries: list[Entry], entry_id: int, *, to: int) -> list[Entry]:
+    """Move an untimed Entry to index `to` of the Daily Log, by keyboard or drag.
+
+    It re-Anchors to whatever Timed Entry ends up above it. Returns the Daily
+    Log's Entries in their new order.
+    """
+    moving = _find(entries, entry_id)
+    if moving.time is not None:
+        raise TimedEntryMoveError("a Timed Entry moves only by changing its time")
+    rest = [entry for entry in daily_log_order(entries) if entry.id != entry_id]
+    to = max(0, min(to, len(rest)))
+    return rest[:to] + [moving] + rest[to:]
 
 
 def today(now: datetime, timezone: tzinfo) -> date:

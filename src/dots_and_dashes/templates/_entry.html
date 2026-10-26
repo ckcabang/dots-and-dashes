@@ -1,4 +1,5 @@
-<li class="entry entry--{{ entry.type }} entry--{{ entry.state }}">
+<li class="entry entry--{{ entry.type }} entry--{{ entry.state }}" data-entry-id="{{ entry.id }}" tabindex="0"
+    {%- if entry.time is none %} draggable="true"{% endif %}>
   {%- if entry.priority %}<span class="signifier signifier--priority" title="Priority">*</span>{% endif -%}
   {%- if entry.inspiration %}<span class="signifier signifier--inspiration" title="Inspiration">!</span>{% endif -%}
   <span class="state-marker" title="{{ entry.type | capitalize }}">{{ {"task": "•", "event": "○", "note": "–"}[entry.type] }}</span>

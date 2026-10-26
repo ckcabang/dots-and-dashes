@@ -62,7 +62,7 @@ def test_blank_text_is_refused_and_logs_nothing(app_client):
     assert daily_log["entries"] == []
 
 
-def test_quick_entry_from_htmx_returns_just_the_new_task(app_client):
+def test_quick_entry_from_htmx_returns_the_daily_log_with_the_new_task(app_client):
     with app_client() as client:
         added = client.post(
             "/entries", data={"text": "buy milk"}, headers={"HX-Request": "true"}
@@ -94,8 +94,8 @@ def test_the_prefix_sets_signifiers_type_and_time_on_todays_daily_log(app_client
     ] == [
         ("note", None, True, True, None, "idea"),
         ("task", "open", True, False, "14:00:00", "call mom"),
-        ("task", "open", False, False, None, ".5 miles run"),
         ("event", None, False, False, "19:00:00", "dinner"),
+        ("task", "open", False, False, None, ".5 miles run"),
     ]
 
 
@@ -109,3 +109,73 @@ def test_the_daily_log_page_shows_signifiers_type_and_time(app_client):
     assert "entry--event" in page.text
     assert '<time datetime="14:30">14:30</time>' in page.text
     assert "dentist" in page.text
+
+
+def _log(client, *texts: str) -> dict[str, int]:
+    ids = {}
+    for text in texts:
+        created = client.post("/api/entries", json={"text": text})
+        assert created.status_code == 201
+        ids[created.json()["text"]] = created.json()["id"]
+    return ids
+
+
+def _todays_texts(client) -> list[str]:
+    daily_log = client.get("/api/daily-logs/today").json()
+    return [entry["text"] for entry in daily_log["entries"]]
+
+
+def test_a_new_untimed_entry_goes_to_the_bottom_of_the_daily_log(app_client):
+    with app_client() as client:
+        _log(client, ". 9am standup", ". 7am gym", "prep notes")
+
+        assert _todays_texts(client) == ["gym", "standup", "prep notes"]
+
+
+def test_a_dragged_untimed_entry_stays_where_it_was_dropped(app_client):
+    with app_client() as client:
+        ids = _log(client, "buy milk", ". 9am standup", ". 12:00 lunch", "book a table")
+        moved = client.post(f"/api/entries/{ids['buy milk']}/move", json={"to": 1})
+
+    assert moved.status_code == 200
+
+    with app_client() as client:
+        assert _todays_texts(client) == ["standup", "buy milk", "lunch", "book a table"]
+
+
+def test_a_timed_entry_cannot_be_dragged(app_client):
+    with app_client() as client:
+        ids = _log(client, ". 9am standup", ". 12:00 lunch")
+        refused = client.post(f"/api/entries/{ids['lunch']}/move", json={"to": 0})
+
+        assert refused.status_code == 422
+        assert _todays_texts(client) == ["standup", "lunch"]
+
+
+def test_changing_a_timed_entrys_time_takes_its_anchored_entries_along(app_client):
+    with app_client() as client:
+        ids = _log(client, ". 9am standup", "prep notes", ". 12:00 lunch")
+        changed = client.post(
+            f"/api/entries/{ids['standup']}/time", json={"time": "14:00"}
+        )
+
+    assert changed.status_code == 200
+
+    with app_client() as client:
+        assert _todays_texts(client) == ["lunch", "standup", "prep notes"]
+        daily_log = client.get("/api/daily-logs/today").json()
+        assert daily_log["entries"][1]["time"] == "14:00:00"
+
+
+def test_moving_an_entry_from_the_page_returns_the_reordered_daily_log(app_client):
+    with app_client() as client:
+        ids = _log(client, ". 9am standup", "prep notes", ". 12:00 lunch")
+        moved = client.post(
+            f"/entries/{ids['prep notes']}/move",
+            data={"to": "2"},
+            headers={"HX-Request": "true"},
+        )
+
+    assert moved.status_code == 200
+    text = moved.text
+    assert text.index("standup") < text.index("lunch") < text.index("prep notes")

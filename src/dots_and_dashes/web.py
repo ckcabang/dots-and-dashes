@@ -6,7 +6,7 @@ from datetime import UTC, date, datetime, time
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, Form, Request
+from fastapi import Depends, FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -29,6 +29,14 @@ def _system_clock() -> datetime:
 
 class NewEntryIn(BaseModel):
     text: str
+
+
+class MoveIn(BaseModel):
+    to: int
+
+
+class TimeIn(BaseModel):
+    time: time
 
 
 class EntryOut(BaseModel):
@@ -57,6 +65,23 @@ def _today(request: Request) -> date:
     return journal.today(state.clock(), state.settings.timezone)
 
 
+def _rearrange(
+    session: Session,
+    entry_id: int,
+    change: Callable[[list[journal.Entry]], list[journal.Entry]],
+) -> DailyLogOut:
+    """Apply an ordering change to the Daily Log holding an Entry, and store it."""
+    day = persistence.find_day(session, entry_id)
+    if day is None:
+        raise HTTPException(404, "no such Entry")
+    entries = change(persistence.entries_on(session, day))
+    persistence.save_daily_log(session, entries)
+    return DailyLogOut(
+        date=day,
+        entries=[EntryOut.model_validate(entry, from_attributes=True) for entry in entries],
+    )
+
+
 SessionDep = Annotated[Session, Depends(_session)]
 TodayDep = Annotated[date, Depends(_today)]
 
@@ -80,6 +105,11 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
     def refuse_blank_entry(request: Request, exc: journal.BlankEntryError) -> Response:
         return JSONResponse({"detail": str(exc)}, status_code=422)
 
+    @app.exception_handler(journal.TimedEntryMoveError)
+    @app.exception_handler(journal.UntimedEntryError)
+    def refuse_reordering(request: Request, exc: ValueError) -> Response:
+        return JSONResponse({"detail": str(exc)}, status_code=422)
+
     @app.get("/", response_class=HTMLResponse)
     def todays_daily_log_page(
         request: Request, session: SessionDep, today: TodayDep
@@ -97,10 +127,28 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
         session: SessionDep,
         today: TodayDep,
     ) -> Response:
-        entry = persistence.add_entry(session, journal.log_entry(text, on=today))
+        persistence.add_entry(session, journal.log_entry(text, on=today))
+        if "HX-Request" in request.headers:
+            # The whole Daily Log, since a Timed Entry may land anywhere in it.
+            entries = persistence.entries_on(session, today)
+            return templates.TemplateResponse(
+                request, "_entries.html", {"entries": entries}, status_code=201
+            )
+        return RedirectResponse("/", status_code=303)
+
+    @app.post("/entries/{entry_id}/move")
+    def move_entry_on_page(
+        request: Request,
+        entry_id: int,
+        to: Annotated[int, Form()],
+        session: SessionDep,
+    ) -> Response:
+        daily_log = _rearrange(
+            session, entry_id, lambda entries: journal.move_entry(entries, entry_id, to=to)
+        )
         if "HX-Request" in request.headers:
             return templates.TemplateResponse(
-                request, "_entry.html", {"entry": entry}, status_code=201
+                request, "_entries.html", {"entries": daily_log.entries}
             )
         return RedirectResponse("/", status_code=303)
 
@@ -108,6 +156,22 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
     def create_entry(body: NewEntryIn, session: SessionDep, today: TodayDep) -> EntryOut:
         entry = persistence.add_entry(session, journal.log_entry(body.text, on=today))
         return EntryOut.model_validate(entry, from_attributes=True)
+
+    @app.post("/api/entries/{entry_id}/move")
+    def move_entry(entry_id: int, body: MoveIn, session: SessionDep) -> DailyLogOut:
+        return _rearrange(
+            session,
+            entry_id,
+            lambda entries: journal.move_entry(entries, entry_id, to=body.to),
+        )
+
+    @app.post("/api/entries/{entry_id}/time")
+    def change_time(entry_id: int, body: TimeIn, session: SessionDep) -> DailyLogOut:
+        return _rearrange(
+            session,
+            entry_id,
+            lambda entries: journal.change_time(entries, entry_id, to=body.time),
+        )
 
     @app.get("/api/daily-logs/today")
     def todays_daily_log(session: SessionDep, today: TodayDep) -> DailyLogOut:

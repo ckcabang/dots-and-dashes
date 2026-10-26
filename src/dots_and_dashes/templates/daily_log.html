@@ -4,12 +4,55 @@
 <h1><time datetime="{{ day.isoformat() }}">{{ day.strftime("%A, %-d %B %Y") }}</time></h1>
 
 <form method="post" action="/entries"
-      hx-post="/entries" hx-target="#entries" hx-swap="beforeend"
+      hx-post="/entries" hx-target="#entries" hx-swap="innerHTML"
       hx-on::after-request="if (event.detail.successful) this.reset()">
   <input name="text" aria-label="New entry" autocomplete="off" autofocus required pattern=".*\S.*">
 </form>
 
 <ul id="entries" class="entries">
-  {% for entry in entries %}{% include "_entry.html" %}{% endfor %}
+  {% include "_entries.html" %}
 </ul>
+
+<script>
+  // Reorder untimed Entries: Alt+ArrowUp/ArrowDown on a focused Entry, or drag.
+  // Timed Entries move only by changing their time, so they aren't draggable
+  // and the server refuses to move them.
+  (() => {
+    const list = document.getElementById("entries");
+    const entries = () => [...list.querySelectorAll("[data-entry-id]")];
+
+    const move = (id, to) =>
+      htmx.ajax("POST", `/entries/${id}/move`, {
+        target: "#entries", swap: "innerHTML", values: { to },
+      }).then(() => list.querySelector(`[data-entry-id="${id}"]`)?.focus());
+
+    list.addEventListener("keydown", (event) => {
+      const entry = event.target.closest("[data-entry-id]");
+      if (!entry || !event.altKey || entry.getAttribute("draggable") !== "true") return;
+      const step = { ArrowUp: -1, ArrowDown: 1 }[event.key];
+      if (!step) return;
+      event.preventDefault();
+      move(entry.dataset.entryId, Math.max(0, entries().indexOf(entry) + step));
+    });
+
+    let dragged = null;
+    list.addEventListener("dragstart", (event) => {
+      dragged = event.target.closest("[data-entry-id]");
+      event.dataTransfer.effectAllowed = "move";
+    });
+    list.addEventListener("dragover", (event) => {
+      if (dragged) event.preventDefault();
+    });
+    list.addEventListener("drop", (event) => {
+      const target = event.target.closest("[data-entry-id]");
+      if (!dragged || !target || target === dragged) return;
+      event.preventDefault();
+      const box = target.getBoundingClientRect();
+      const below = event.clientY > box.top + box.height / 2;
+      const others = entries().filter((entry) => entry !== dragged);
+      move(dragged.dataset.entryId, others.indexOf(target) + (below ? 1 : 0));
+    });
+    list.addEventListener("dragend", () => { dragged = null; });
+  })();
+</script>
 {% endblock %}

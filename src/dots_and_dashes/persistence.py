@@ -8,6 +8,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     Identity,
+    Integer,
     String,
     Text,
     Time,
@@ -36,6 +37,8 @@ class EntryRow(Base):
     time: Mapped[TimeOfDay | None] = mapped_column(Time)
     text: Mapped[str] = mapped_column(Text)
     day: Mapped[date] = mapped_column(Date, index=True)
+    # Manual position within its Daily Log; the Journal module orders by it.
+    position: Mapped[int] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -62,14 +65,36 @@ def add_entry(session: Session, new_entry: journal.NewEntry) -> journal.Entry:
         time=new_entry.time,
         text=new_entry.text,
         day=new_entry.day,
+        # A new Entry goes to the bottom of its Daily Log.
+        position=select(func.coalesce(func.max(EntryRow.position), 0) + 1)
+        .where(EntryRow.day == new_entry.day)
+        .scalar_subquery(),
     )
     session.add(row)
     session.flush()
+    # A new Timed Entry slots in by its time, so store the Daily Log as it now
+    # shows: the manual order is always the order on the page.
+    save_daily_log(session, entries_on(session, new_entry.day))
     return row.to_entry()
 
 
 def entries_on(session: Session, day: date) -> list[journal.Entry]:
     rows = session.scalars(
-        select(EntryRow).where(EntryRow.day == day).order_by(EntryRow.id)
+        select(EntryRow)
+        .where(EntryRow.day == day)
+        .order_by(EntryRow.position, EntryRow.id)
     )
     return journal.daily_log_order([row.to_entry() for row in rows])
+
+
+def find_day(session: Session, entry_id: int) -> date | None:
+    return session.scalar(select(EntryRow.day).where(EntryRow.id == entry_id))
+
+
+def save_daily_log(session: Session, entries: list[journal.Entry]) -> None:
+    """Store a Daily Log's Entries, in order, as its manual order, with their times."""
+    for position, entry in enumerate(entries, start=1):
+        row = session.get_one(EntryRow, entry.id)
+        row.position = position
+        row.time = entry.time
+    session.flush()

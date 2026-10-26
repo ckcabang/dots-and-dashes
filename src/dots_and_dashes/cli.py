@@ -1,5 +1,7 @@
 """The command line: `dots-and-dashes create-user` is the only way a User is made,
-and `dots-and-dashes migrate` is the release command that runs the migrations."""
+and `dots-and-dashes migrate` is the release command that runs the migrations.
+Only docker-compose.yml runs `create-user --if-missing`, to give a local stack its
+User; the deployed apps' release command only migrates."""
 
 import argparse
 import getpass
@@ -44,6 +46,12 @@ def _parser() -> argparse.ArgumentParser:
         metavar="VAR",
         help="the environment variable holding the password, such as a secret "
         "(default USER_PASSWORD); prompted for when unset",
+    )
+    create_user.add_argument(
+        "--if-missing",
+        action="store_true",
+        help="leave a User who already has this email alone instead of refusing; "
+        "for the local User docker-compose.yml creates on every start",
     )
     commands.add_parser(
         "migrate",
@@ -99,7 +107,10 @@ def main(argv: list[str] | None = None) -> None:
                 session, args.email, password_hash, args.timezone, canary=args.canary
             )
     except persistence.DuplicateUserError as exc:
-        sys.exit(str(exc))
+        if not args.if_missing:
+            sys.exit(str(exc))
+        print(f"Left as it is: {exc}.")
+        return
     finally:
         engine.dispose()
     kind = "Canary User" if user.canary else "User"

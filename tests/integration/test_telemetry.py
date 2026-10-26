@@ -211,6 +211,7 @@ def entries_refuse_writes(database_url):
     engine.dispose()
 
 
+@pytest.mark.failed_requests
 def test_a_failed_save_is_counted_traced_and_logged(client, signals, entries_refuse_writes):
     response = client.post("/api/entries", json={"text": "buy milk"})
 
@@ -232,6 +233,7 @@ def test_a_failed_save_is_counted_traced_and_logged(client, signals, entries_ref
 SECRET = "meet Alex at the hidden cafe"
 
 
+@pytest.mark.failed_requests
 def test_entry_text_never_enters_a_signal_even_when_a_save_fails(
     client, signals, entries_refuse_writes
 ):
@@ -270,7 +272,20 @@ def test_saved_entry_and_capture_text_never_enters_a_signal(client, signals):
 @dataclass
 class Served:
     client: httpx2.Client
-    output: pytest.CaptureFixture[str]
+    server: uvicorn.Server
+    thread: threading.Thread
+    capture: pytest.CaptureFixture[str]
+
+    def stop(self) -> None:
+        self.server.should_exit = True
+        self.thread.join()
+
+    def output(self) -> str:
+        """Everything the server wrote to stdout and stderr, once it has
+        stopped: uvicorn logs an error's traceback after the response is sent."""
+        self.stop()
+        out, err = self.capture.readouterr()
+        return out + err
 
 
 class _CurrentStream(logging.StreamHandler):
@@ -312,7 +327,7 @@ def served(settings, clock, user, password, signals, capfd) -> Iterator[Served]:
         with httpx2.Client(base_url=f"http://{host}:{port}") as client:
             response = client.post("/login", data={"email": user, "password": password})
             assert response.status_code == 303, response.text
-            yield Served(client, capfd)
+            yield Served(client, server, thread, capfd)
     finally:
         server.should_exit = True
         thread.join()
@@ -360,6 +375,7 @@ FAILED_SAVES: dict[str, tuple[str, Callable[[], dict]]] = {
 }
 
 
+@pytest.mark.failed_requests
 @pytest.mark.parametrize(("route", "request_args"), FAILED_SAVES.values(), ids=FAILED_SAVES)
 def test_a_failed_save_logs_its_error_type_and_trace_but_no_journal_text(
     served, signals, journal_refuses_writes, route, request_args
@@ -367,7 +383,6 @@ def test_a_failed_save_logs_its_error_type_and_trace_but_no_journal_text(
     # The Capture a Triage places: its text is in the failing row too.
     capture = served.client.post("/api/captures", json={"text": f"{SECRET} 6"}).json()
     path = route.format(capture_id=capture["id"])
-    served.output.readouterr()
 
     with journal_refuses_writes():
         response = served.client.post(path, **request_args())
@@ -375,8 +390,7 @@ def test_a_failed_save_logs_its_error_type_and_trace_but_no_journal_text(
     # The response the User got before: Starlette's own.
     assert (response.status_code, response.text) == (500, "Internal Server Error")
     assert response.headers["content-type"].startswith("text/plain")
-    out, err = served.output.readouterr()
-    logs = out + err
+    logs = served.output()
     # Postgres quotes the failing row, text and all, in its error.
     assert "Alex" not in logs
     (span,) = [

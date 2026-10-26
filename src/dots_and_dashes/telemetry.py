@@ -32,7 +32,8 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter
 from opentelemetry.trace import Span, SpanKind, Status, StatusCode, format_trace_id, use_span
 from opentelemetry.util.re import parse_env_headers
-from sqlalchemy import Engine, event
+from sqlalchemy import Engine, create_engine, event
+from sqlalchemy.pool import PoolProxiedConnection, QueuePool
 from starlette.responses import PlainTextResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
@@ -143,8 +144,10 @@ class Telemetry:
         trace.get_current_span().set_attributes(attributes)
         self.log(SeverityNumber.INFO, "Entry saved", attributes)
 
-    def instrument_engine(self, engine: Engine) -> None:
-        """Trace each database statement as a child of the request's span."""
+    def create_engine(self, url: str, **kwargs: Any) -> Engine:
+        """A SQLAlchemy engine that traces each wait for a pooled connection
+        and each database statement, as children of the request's span."""
+        engine = create_engine(url, poolclass=_traced_pool(self.tracer), **kwargs)
         tracer = self.tracer
 
         @event.listens_for(engine, "before_cursor_execute")
@@ -169,6 +172,43 @@ class Telemetry:
                 span = spans.pop()
                 _record_error(span, context.original_exception)
                 span.end()
+
+        return engine
+
+
+def _traced_pool(tracer: trace.Tracer) -> type[QueuePool]:
+    """A connection pool that traces each checkout: the wait for a free
+    connection, which is how an exhausted pool shows in a trace."""
+
+    class TracedQueuePool(QueuePool):
+        def __init__(
+            self, creator: Any, pool_size: int = 5, max_overflow: int = 10, **kwargs: Any
+        ) -> None:
+            super().__init__(creator, pool_size=pool_size, max_overflow=max_overflow, **kwargs)
+            self.max_connections = pool_size + max_overflow
+
+        def connect(self) -> PoolProxiedConnection:
+            span = tracer.start_span(
+                "db.connection.checkout",
+                kind=SpanKind.CLIENT,
+                attributes={
+                    "db.system.name": "postgresql",
+                    # The most connections the app may hold, and how many it
+                    # held when this checkout began: equal means a wait.
+                    "db.client.connection.max": self.max_connections,
+                    "db.client.connection.used": self.checkedout(),
+                },
+            )
+            with use_span(
+                span, end_on_exit=True, record_exception=False, set_status_on_exception=False
+            ):
+                try:
+                    return super().connect()
+                except Exception as exc:
+                    _record_error(span, exc)
+                    raise
+
+    return TracedQueuePool
 
 
 # Where a connection keeps the spans of its statements in flight.

@@ -12,11 +12,11 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
-from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from starlette.middleware.sessions import SessionMiddleware
 
 from dots_and_dashes import accounts, journal, persistence
+from dots_and_dashes.chaos import SaveChaos
 from dots_and_dashes.settings import Settings
 from dots_and_dashes.telemetry import RequestTelemetry, Telemetry
 
@@ -322,6 +322,16 @@ SessionDep = Annotated[Session, Depends(_session, scope="function")]
 TodayDep = Annotated[date, Depends(_today)]
 MonthDep = Annotated[date, Depends(_month_param)]
 
+
+def _save_chaos(request: Request, session: SessionDep) -> None:
+    """With the chaos switch on, fail or slow this Entry save. It holds its
+    database connection meanwhile, the way a struggling database would."""
+    chaos: SaveChaos = request.app.state.save_chaos
+    if chaos.on:
+        session.connection()
+        chaos.save()
+
+
 # The Task State changes the keyboard and the API can ask for, by URL name;
 # any other name is refused as invalid.
 TaskStateChange = Literal["complete", "cancel", "reopen"]
@@ -523,6 +533,14 @@ REFUSED_AS_INVALID: tuple[type[ValueError], ...] = (
 ENTRY_SAVES = {("POST", "/entries"), ("POST", "/api/entries")}
 
 
+def _pool_size(settings: Settings) -> dict[str, int]:
+    """With DB_POOL_SIZE set, the app holds at most that many connections;
+    unset, SQLAlchemy's own pool of 5 plus 10 overflow."""
+    if settings.db_pool_size is None:
+        return {}
+    return {"pool_size": settings.db_pool_size, "max_overflow": 0}
+
+
 def create_app(
     settings: Settings | None = None,
     clock: Clock = _system_clock,
@@ -533,8 +551,9 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        engine = create_engine(settings.database_url, pool_pre_ping=True)
-        telemetry.instrument_engine(engine)
+        engine = telemetry.create_engine(
+            settings.database_url, pool_pre_ping=True, **_pool_size(settings)
+        )
         app.state.sessionmaker = sessionmaker(engine)
         yield
         engine.dispose()
@@ -542,6 +561,7 @@ def create_app(
     app = FastAPI(title="Dots & Dashes", lifespan=lifespan)
     app.state.settings = settings
     app.state.clock = clock
+    app.state.save_chaos = SaveChaos.from_settings(settings)
     app.add_middleware(
         SessionMiddleware,
         secret_key=settings.session_secret,
@@ -645,7 +665,7 @@ def create_app(
     ) -> Response:
         return render_daily_log(request, session, day, today)
 
-    @app.post("/entries")
+    @app.post("/entries", dependencies=[Depends(_save_chaos)])
     def quick_entry(
         request: Request,
         text: Annotated[str, Form()],
@@ -728,7 +748,7 @@ def create_app(
         # HTMX swaps the Entry's line for this empty body.
         return Response(status_code=200)
 
-    @app.post("/api/entries", status_code=201)
+    @app.post("/api/entries", status_code=201, dependencies=[Depends(_save_chaos)])
     def create_entry(
         request: Request, body: NewEntryIn, session: SessionDep, today: TodayDep
     ) -> EntryOut:

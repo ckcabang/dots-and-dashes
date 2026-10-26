@@ -1,7 +1,8 @@
 """Telemetry on the key journey: logging an Entry on today's Daily Log.
 
-The app exports to in-memory exporters here, in place of Grafana Cloud, so a
-test can read every span, metric and log the journey produced.
+The app exports to in-memory exporters here (the `signals` fixture), in
+place of Grafana Cloud, so a test can read every span, metric and log the
+journey produced.
 """
 
 import copy
@@ -17,65 +18,9 @@ from dataclasses import dataclass, replace
 import httpx2
 import pytest
 import uvicorn
-from opentelemetry.sdk._logs import ReadableLogRecord
-from opentelemetry.sdk._logs.export import InMemoryLogRecordExporter
-from opentelemetry.sdk.metrics.export import InMemoryMetricReader
-from opentelemetry.sdk.trace import ReadableSpan
-from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from sqlalchemy import create_engine, text
 
-from dots_and_dashes.telemetry import Telemetry, resource_for
 from dots_and_dashes.web import create_app
-
-
-@dataclass
-class Signals:
-    """Everything the app exported, read back after a flush."""
-
-    telemetry: Telemetry
-    span_exporter: InMemorySpanExporter
-    metric_reader: InMemoryMetricReader
-    log_exporter: InMemoryLogRecordExporter
-
-    def spans(self) -> list[ReadableSpan]:
-        self.telemetry.force_flush()
-        return list(self.span_exporter.get_finished_spans())
-
-    def server_span(self, method: str, route: str) -> ReadableSpan:
-        (span,) = [
-            s
-            for s in self.spans()
-            if s.attributes
-            and s.attributes.get("http.request.method") == method
-            and s.attributes.get("http.route") == route
-        ]
-        return span
-
-    def logs(self) -> list[ReadableLogRecord]:
-        self.telemetry.force_flush()
-        return list(self.log_exporter.get_finished_logs())
-
-    def points(self) -> dict[str, list]:
-        """Each metric's data points, by metric name. Exemplars come with
-        the first collection after a measurement only, so collect once."""
-        data = self.metric_reader.get_metrics_data()
-        assert data is not None
-        return {
-            metric.name: list(metric.data.data_points)
-            for resource in data.resource_metrics
-            for scope in resource.scope_metrics
-            for metric in scope.metrics
-        }
-
-    def as_text(self) -> str:
-        """Every signal, serialized the way an exporter would see it."""
-        data = self.metric_reader.get_metrics_data()
-        return "\n".join(
-            [span.to_json() for span in self.spans()]
-            + [record.to_json() for record in self.logs()]
-            + [data.to_json() if data else ""]
-        )
-
 
 RELEASE = "registry.fly.io/dots-and-dashes:abc123"
 
@@ -84,20 +29,6 @@ RELEASE = "registry.fly.io/dots-and-dashes:abc123"
 def settings(settings):
     """The app as deployed to prod."""
     return replace(settings, environment="prod", release=RELEASE)
-
-
-@pytest.fixture
-def signals(settings) -> Signals:
-    span_exporter = InMemorySpanExporter()
-    metric_reader = InMemoryMetricReader()
-    log_exporter = InMemoryLogRecordExporter()
-    telemetry = Telemetry(
-        span_exporter=span_exporter,
-        metric_reader=metric_reader,
-        log_exporter=log_exporter,
-        resource=resource_for(settings),
-    )
-    return Signals(telemetry, span_exporter, metric_reader, log_exporter)
 
 
 @pytest.fixture

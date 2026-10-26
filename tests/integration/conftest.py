@@ -8,6 +8,7 @@ missing and rebuilt with Alembic once per run.
 import logging
 import os
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -17,10 +18,16 @@ from alembic import command
 from alembic.config import Config
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from opentelemetry.sdk._logs import ReadableLogRecord
+from opentelemetry.sdk._logs.export import InMemoryLogRecordExporter
+from opentelemetry.sdk.metrics.export import InMemoryMetricReader
+from opentelemetry.sdk.trace import ReadableSpan
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from sqlalchemy import create_engine, make_url, text
 
 from dots_and_dashes import cli, telemetry
 from dots_and_dashes.settings import Settings
+from dots_and_dashes.telemetry import Telemetry, resource_for
 
 TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL", "")
 
@@ -158,3 +165,66 @@ def logged_in(user):
 @pytest.fixture
 def clock():
     return lambda: NOW
+
+
+@dataclass
+class Signals:
+    """Everything the app exported, read back after a flush."""
+
+    telemetry: Telemetry
+    span_exporter: InMemorySpanExporter
+    metric_reader: InMemoryMetricReader
+    log_exporter: InMemoryLogRecordExporter
+
+    def spans(self) -> list[ReadableSpan]:
+        self.telemetry.force_flush()
+        return list(self.span_exporter.get_finished_spans())
+
+    def server_span(self, method: str, route: str) -> ReadableSpan:
+        (span,) = [
+            s
+            for s in self.spans()
+            if s.attributes
+            and s.attributes.get("http.request.method") == method
+            and s.attributes.get("http.route") == route
+        ]
+        return span
+
+    def logs(self) -> list[ReadableLogRecord]:
+        self.telemetry.force_flush()
+        return list(self.log_exporter.get_finished_logs())
+
+    def points(self) -> dict[str, list]:
+        """Each metric's data points, by metric name. Exemplars come with
+        the first collection after a measurement only, so collect once."""
+        data = self.metric_reader.get_metrics_data()
+        assert data is not None
+        return {
+            metric.name: list(metric.data.data_points)
+            for resource in data.resource_metrics
+            for scope in resource.scope_metrics
+            for metric in scope.metrics
+        }
+
+    def as_text(self) -> str:
+        """Every signal, serialized the way an exporter would see it."""
+        data = self.metric_reader.get_metrics_data()
+        return "\n".join(
+            [span.to_json() for span in self.spans()]
+            + [record.to_json() for record in self.logs()]
+            + [data.to_json() if data else ""]
+        )
+
+
+@pytest.fixture
+def signals(settings) -> Signals:
+    span_exporter = InMemorySpanExporter()
+    metric_reader = InMemoryMetricReader()
+    log_exporter = InMemoryLogRecordExporter()
+    telemetry = Telemetry(
+        span_exporter=span_exporter,
+        metric_reader=metric_reader,
+        log_exporter=log_exporter,
+        resource=resource_for(settings),
+    )
+    return Signals(telemetry, span_exporter, metric_reader, log_exporter)

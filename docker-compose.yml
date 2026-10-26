@@ -23,8 +23,12 @@ services:
       SESSION_SECRET: ${SESSION_SECRET:-}
       SECURE_COOKIES: ${SECURE_COOKIES:-}
       FLAG_MONTHLY_REVIEW: ${FLAG_MONTHLY_REVIEW:-}
+      # The local User's password, as the README states. Compose only: Fly never runs this.
+      LOCAL_USER_PASSWORD: dots-and-dashes
     command: >-
       sh -c "alembic upgrade head &&
+      dots-and-dashes create-user --if-missing --email me@example.com
+      --timezone ${LOCAL_USER_TIMEZONE:-UTC} --password-env LOCAL_USER_PASSWORD &&
       exec uvicorn dots_and_dashes.web:create_app --factory --host 0.0.0.0 --port 8000"
     ports:
       - "${APP_PORT:-8000}:8000"

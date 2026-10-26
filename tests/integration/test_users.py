@@ -1,6 +1,7 @@
 """Each User's journal is theirs alone, and Users come only from the CLI."""
 
 import pytest
+from fastapi.testclient import TestClient
 
 from dots_and_dashes import cli
 from dots_and_dashes.web import create_app
@@ -107,3 +108,22 @@ def test_the_cli_refuses_an_empty_password(settings, monkeypatch):
 
     with pytest.raises(SystemExit, match="empty"):
         cli.main(["create-user", "--email", "me@example.com", "--timezone", "UTC"])
+
+
+def test_creating_a_user_if_missing_leaves_an_existing_user_alone(
+    settings, monkeypatch, app, capsys
+):
+    monkeypatch.setenv("DATABASE_URL", settings.database_url)
+    local_user = ["create-user", "--email", "local@example.com", "--timezone", "UTC"]
+    monkeypatch.setenv("USER_PASSWORD", "the first password")
+    cli.main([*local_user, "--if-missing"])
+    monkeypatch.setenv("USER_PASSWORD", "a second password")
+
+    cli.main([*local_user, "--if-missing"])
+
+    assert "already exists" in capsys.readouterr().out
+    with TestClient(app) as client:
+        second = {"email": "local@example.com", "password": "a second password"}
+        assert client.post("/login", data=second).status_code == 401
+        first = {"email": "local@example.com", "password": "the first password"}
+        assert client.post("/login", data=first, follow_redirects=False).status_code == 303

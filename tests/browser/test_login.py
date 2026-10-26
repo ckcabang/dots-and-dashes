@@ -25,6 +25,21 @@ def test_logging_in_opens_todays_daily_log_and_logging_out_ends_it(
     expect(page).to_have_url(f"{base_url}/login")
 
 
+def test_the_local_user_the_readme_documents_logs_in_on_the_compose_stack(
+    page: Page, base_url: str
+):
+    # The test stack is docker-compose.yml, which creates this User on startup.
+    page.context.clear_cookies()
+
+    page.goto("/login")
+    page.get_by_label("Email").fill("me@example.com")
+    page.get_by_label("Password").fill("dots-and-dashes")
+    page.get_by_label("Password").press("Enter")
+
+    expect(page).to_have_url(f"{base_url}/")
+    expect(page.get_by_label("New entry")).to_be_focused()
+
+
 def test_a_wrong_password_is_refused_on_the_login_page(page: Page, base_url: str, user: str):
     page.context.clear_cookies()
 

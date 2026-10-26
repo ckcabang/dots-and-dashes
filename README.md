@@ -8,13 +8,20 @@ A personal, keyboard-first bullet journal. See [`CONTEXT.md`](CONTEXT.md) for th
 docker compose up --build
 ```
 
-This starts Postgres and the app, applies the Alembic migrations, and serves the journal at <http://localhost:8000>, behind a login.
+This starts Postgres and the app, applies the Alembic migrations, creates the local User, and serves the journal at <http://localhost:8000>. Log in as:
 
-There is no sign-up page. Create the User, and the Canary User for monitoring, from the command line, with the password from a secret (the `USER_PASSWORD` environment variable, or the one `--password-env` names) or typed at a prompt:
+- **Email:** `me@example.com`
+- **Password:** `dots-and-dashes`
+
+The local User's "today" is UTC; set `LOCAL_USER_TIMEZONE` (an IANA name, e.g. `America/Los_Angeles`) before the first `up` to change it. Restarts leave the User as it is.
+
+### Users on a deployed app
+
+There is no sign-up page, and only Compose makes the local User. On Fly the release command only migrates, so create the User, and the Canary User for monitoring, from the command line on the app's Machine (`scripts/provision-dev` and `scripts/provision-prod` walk through it), with the password from a secret (the `USER_PASSWORD` environment variable, or the one `--password-env` names) or typed at a prompt:
 
 ```sh
-docker compose exec app dots-and-dashes create-user --email me@example.com --timezone America/Los_Angeles
-docker compose exec -e CANARY_PASSWORD app dots-and-dashes create-user --email canary@example.com --timezone UTC --canary --password-env CANARY_PASSWORD
+fly ssh console -a <app> --pty -C "/app/.venv/bin/dots-and-dashes create-user --email me@example.com --timezone America/Los_Angeles"
+fly ssh console -a <app> --pty -C "/app/.venv/bin/dots-and-dashes create-user --email canary@example.com --timezone UTC --canary"
 ```
 
 Each User's timezone (an IANA name) decides their "today". A login lasts 30 days, in a session cookie signed with `SESSION_SECRET`. Set it wherever the app is deployed; without it each app process makes its own, so a restart logs everyone out. Set `SECURE_COOKIES=on` where the app is served over HTTPS, so the cookie is never sent in the clear. Entries logged before Users existed belong to the first User created who isn't the Canary User.

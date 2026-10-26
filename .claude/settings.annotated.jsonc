@@ -1,0 +1,72 @@
+// Annotated copy of .claude/settings.json (project, committed). Keep the two in sync.
+// Adds to ~/.claude/settings.json, which holds the sandbox itself, the network allowlist and the credential masks.
+{
+    "permissions": {
+      // Run without a prompt. Each pattern here is also in sandbox.excludedCommands below
+      "allow": [
+        // Bare forms only: with "make test *", arguments could change what make runs outside the sandbox
+        "Bash(make test)",
+        "Bash(make check)",
+        "Bash(make test-logs)",
+        "Bash(make test-down)",
+        // Lifecycle subcommands only, each bare and with arguments ("up *" doesn't match plain "up").
+        // No exec/run (arbitrary commands in a container) and no global flags (-f other.yml up)
+        "Bash(docker compose up)",
+        "Bash(docker compose up *)",
+        "Bash(docker compose down)",
+        "Bash(docker compose down *)",
+        "Bash(docker compose ps)",
+        "Bash(docker compose ps *)",
+        "Bash(docker compose logs)",
+        "Bash(docker compose logs *)",
+        "Bash(docker compose build)",
+        "Bash(docker compose build *)",
+        "Bash(docker compose stop)",
+        "Bash(docker compose stop *)",
+        "Bash(docker compose restart)",
+        "Bash(docker compose restart *)",
+        // Read-only container listing
+        "Bash(docker ps)",
+        "Bash(docker ps *)"
+      ],
+      // These files decide what the commands above run outside the sandbox, so editing them prompts YOU.
+      // Covers the Edit and Write tools only, not shell commands
+      "ask": [
+        "Edit(**/Makefile)",
+        "Edit(**/Dockerfile)",
+        // Includes docker-compose.override.yml, which `docker compose up` loads automatically
+        "Edit(**/docker-compose*.yml)",
+        "Edit(**/compose*.yml)",
+        // Compose reads .env, which can set COMPOSE_FILE to point it at another file
+        "Edit(**/.env)"
+      ]
+    },
+    "sandbox": {
+      // Run OUTSIDE the sandbox with full access and no credential masks, because they need the Docker socket.
+      // Only an exact, standalone command matches: a cd/&& or env-var prefix, or any extra argument, runs it sandboxed.
+      // Accepted risk: `make test`/`make check` run pytest, so agent-written test code runs outside the sandbox too.
+      // Sandboxed pytest can't reach the stack's published ports (checked 2026-10-26: connection refused)
+      "excludedCommands": [
+        "docker ps",
+        "docker ps *",
+        "docker compose up",
+        "docker compose up *",
+        "docker compose down",
+        "docker compose down *",
+        "docker compose ps",
+        "docker compose ps *",
+        "docker compose logs",
+        "docker compose logs *",
+        "docker compose build",
+        "docker compose build *",
+        "docker compose stop",
+        "docker compose stop *",
+        "docker compose restart",
+        "docker compose restart *",
+        "make test",
+        "make check",
+        "make test-logs",
+        "make test-down"
+      ]
+    }
+  }

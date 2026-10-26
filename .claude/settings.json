@@ -5,6 +5,8 @@
           "Bash(make check)",
           "Bash(make test-logs)",
           "Bash(make test-down)",
+          "Bash(make test-integration)",
+          "Bash(make test-browser)",
           "Bash(docker compose up)",
           "Bash(docker compose up *)",
           "Bash(docker compose down)",
@@ -20,9 +22,7 @@
           "Bash(docker compose restart)",
           "Bash(docker compose restart *)",
           "Bash(docker ps)",
-          "Bash(docker ps *)",
-          "Bash(make test-integration)",
-          "Bash(make test-browser)"
+          "Bash(docker ps *)"
         ],
         "ask": [
           "Edit(**/Makefile)",

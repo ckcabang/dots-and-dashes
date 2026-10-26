@@ -9,6 +9,9 @@
         "Bash(make check)",
         "Bash(make test-logs)",
         "Bash(make test-down)",
+        // One suite against the test stack; make test-unit needs no stack and runs sandboxed
+        "Bash(make test-integration)",
+        "Bash(make test-browser)",
         // Lifecycle subcommands only, each bare and with arguments ("up *" doesn't match plain "up").
         // No exec/run (arbitrary commands in a container) and no global flags (-f other.yml up)
         "Bash(docker compose up)",
@@ -27,10 +30,7 @@
         "Bash(docker compose restart *)",
         // Read-only container listing
         "Bash(docker ps)",
-        "Bash(docker ps *)",
-        // One suite against the test stack; make test-unit needs no stack and runs sandboxed
-        "Bash(make test-integration)",
-        "Bash(make test-browser)"
+        "Bash(docker ps *)"
       ],
       // These files decide what the commands above run outside the sandbox, so editing them prompts YOU.
       // Covers the Edit and Write tools; sandbox.filesystem.denyWrite below covers shell commands

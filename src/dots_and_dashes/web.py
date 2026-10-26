@@ -188,6 +188,19 @@ TASK_STATE_CHANGES: dict[str, Callable[[journal.Entry], journal.Entry]] = {
 }
 
 
+def _place(session: Session, entry: journal.Entry) -> None:
+    """Store an Entry's place on the Daily Log it was logged or moved onto, if any."""
+    if entry.location is journal.Location.DAY and entry.day is not None:
+        others = [e for e in persistence.entries_on(session, entry.day) if e.id != entry.id]
+        persistence.save_daily_log(session, journal.place_on_daily_log(entry, others))
+
+
+def _add(session: Session, new_entry: journal.NewEntry) -> journal.Entry:
+    entry = persistence.add_entry(session, new_entry)
+    _place(session, entry)
+    return entry
+
+
 def _change_task_state(session: Session, entry_id: int, change: str) -> journal.Entry:
     act = TASK_STATE_CHANGES.get(change)
     if act is None:
@@ -229,9 +242,9 @@ def _migrate(
     task = persistence.get_entry(session, entry_id)
     migration = journal.migrate(task, to=_destination(body, planning), planning=planning)
     persistence.save_entry(session, migration.original)
-    copy = persistence.add_entry(session, migration.copy)
+    copy = _add(session, migration.copy)
     for note in journal.move_nested_notes(persistence.nested_notes(session, task.id), to=copy):
-        persistence.save_entry(session, note)
+        _place(session, persistence.save_entry(session, note))
     return persistence.get_entry(session, task.id), copy
 
 
@@ -247,9 +260,11 @@ def _daily_migration(
 def _move_event(session: Session, entry_id: int, on: date) -> journal.Entry:
     event = persistence.get_entry(session, entry_id)
     moved, notes = journal.move_event(event, persistence.nested_notes(session, entry_id), on=on)
+    saved = persistence.save_entry(session, moved)
+    _place(session, saved)
     for note in notes:
-        persistence.save_entry(session, note)
-    return persistence.save_entry(session, moved)
+        _place(session, persistence.save_entry(session, note))
+    return saved
 
 
 def _delete(session: Session, entry_id: int) -> None:
@@ -373,7 +388,7 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
         day: Annotated[date | None, Form()] = None,
     ) -> Response:
         on = day or today
-        persistence.add_entry(session, journal.log_entry(text, on=on))
+        _add(session, journal.log_entry(text, on=on))
         if "HX-Request" in request.headers:
             # The whole Daily Log, since a Timed Entry may land anywhere in it.
             return _entries_fragment(request, session, on, status_code=201)
@@ -448,9 +463,7 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
 
     @app.post("/api/entries", status_code=201)
     def create_entry(body: NewEntryIn, session: SessionDep, today: TodayDep) -> EntryOut:
-        entry = persistence.add_entry(
-            session, journal.log_entry(body.text, on=body.day or today)
-        )
+        entry = _add(session, journal.log_entry(body.text, on=body.day or today))
         return EntryOut.model_validate(entry, from_attributes=True)
 
     @app.post("/api/entries/{entry_id}/move")
@@ -556,9 +569,7 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
         session: SessionDep,
         today: TodayDep,
     ) -> Response:
-        persistence.add_entry(
-            session, journal.log_month_entry(text, month=month, today=today)
-        )
+        _add(session, journal.log_month_entry(text, month=month, today=today))
         return RedirectResponse(f"/months/{month:%Y-%m}", status_code=303)
 
     @app.get("/api/monthly-logs/{month}")
@@ -579,9 +590,7 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
         month: MonthDep, body: MonthEntryIn, session: SessionDep, today: TodayDep
     ) -> EntryOut:
         return _out(
-            persistence.add_entry(
-                session, journal.log_month_entry(body.text, month=month, today=today)
-            )
+            _add(session, journal.log_month_entry(body.text, month=month, today=today))
         )
 
     @app.get("/migration", response_class=HTMLResponse)
@@ -644,14 +653,9 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
         # An empty date field reads as no date.
         on: Annotated[date | None, Form(alias="date")] = None,
     ) -> Response:
-        persistence.add_entry(
+        _add(
             session,
-            journal.log_future_entry(
-                text,
-                month=_parse_month(month),
-                on=on,
-                today=today,
-            ),
+            journal.log_future_entry(text, month=_parse_month(month), on=on, today=today),
         )
         return RedirectResponse("/future", status_code=303)
 
@@ -672,7 +676,7 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
         body: FutureEntryIn, session: SessionDep, today: TodayDep
     ) -> EntryOut:
         return _out(
-            persistence.add_entry(
+            _add(
                 session,
                 journal.log_future_entry(
                     body.text, month=_parse_month(body.month), on=body.on, today=today

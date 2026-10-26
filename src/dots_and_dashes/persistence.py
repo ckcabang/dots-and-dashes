@@ -21,7 +21,6 @@ from sqlalchemy import (
     select,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
-from sqlalchemy.sql.selectable import ScalarSelect
 
 from dots_and_dashes import journal
 
@@ -46,8 +45,8 @@ class EntryRow(Base):
     location: Mapped[str] = mapped_column(String(16), server_default="day")
     # The month, as its first day, for the Monthly Log and Future Log.
     month: Mapped[date | None] = mapped_column(Date, index=True)
-    # Manual position within its Daily Log; the Journal module orders by it.
-    # Monthly Log and Future Log Entries get one too, but nothing orders by it.
+    # Manual position within its Daily Log, as the Journal module ordered it.
+    # Monthly Log and Future Log Entries have one too, but nothing orders by it.
     position: Mapped[int] = mapped_column(Integer)
     # A Nested Note's parent Task or Event.
     parent_id: Mapped[int | None] = mapped_column(
@@ -133,28 +132,11 @@ def _loaded(session: Session, rows: Iterable[EntryRow]) -> list[journal.Entry]:
     ]
 
 
-def _bottom_of(entry: journal.NewEntry | journal.Entry) -> ScalarSelect[int]:
-    """The position after the last Entry where this one lives."""
-    return (
-        select(func.coalesce(func.max(EntryRow.position), 0) + 1)
-        .where(
-            EntryRow.location == entry.location,
-            EntryRow.day == entry.day,
-            EntryRow.month == entry.month,
-        )
-        .scalar_subquery()
-    )
-
-
 def add_entry(session: Session, new_entry: journal.NewEntry) -> journal.Entry:
-    # A new Entry goes to the bottom of its Daily Log.
-    row = EntryRow(**_columns(new_entry), position=_bottom_of(new_entry))
+    """Store a new Entry. Its place in a Daily Log's order is stored with save_daily_log."""
+    row = EntryRow(**_columns(new_entry), position=0)
     session.add(row)
     session.flush()
-    if new_entry.location == journal.Location.DAY and new_entry.day is not None:
-        # A new Timed Entry slots in by its time, so store the Daily Log as it
-        # now shows: the manual order is always the order on the page.
-        save_daily_log(session, entries_on(session, new_entry.day))
     [entry] = _loaded(session, [row])
     return entry
 
@@ -240,20 +222,11 @@ def successor(session: Session, entry_id: int) -> journal.Entry | None:
 
 
 def save_entry(session: Session, entry: journal.Entry) -> journal.Entry:
-    """Store the changes to an existing Entry.
-
-    One moved to another Daily Log, task list or Future Log month goes to the
-    bottom of it, and a Daily Log's manual order is kept as it now shows.
-    """
+    """Store the changes to an existing Entry. Its place in a Daily Log's order
+    is stored with save_daily_log."""
     row = _row(session, entry.id)
-    moved = (row.location, row.day, row.month) != (entry.location, entry.day, entry.month)
     for column, value in _columns(entry).items():
         setattr(row, column, value)
-    if moved:
-        row.position = _bottom_of(entry)  # type: ignore[assignment]
-        session.flush()
-        if entry.location == journal.Location.DAY and entry.day is not None:
-            save_daily_log(session, entries_on(session, entry.day))
     session.flush()
     [saved] = _loaded(session, [row])
     return saved

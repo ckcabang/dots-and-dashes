@@ -231,6 +231,16 @@ def arrange_daily_log(entries: list[Entry]) -> list[Entry]:
     return _with_nested_notes(entries, daily_log_order)
 
 
+def place_on_daily_log(entry: Entry, daily_log: list[Entry]) -> list[Entry]:
+    """Put an Entry logged or moved onto a Daily Log, given the Entries already there.
+
+    It goes to the bottom of the manual order, so an untimed Entry ends up
+    last and a Timed Entry slots in by its time. Returns the Daily Log in its
+    new order, to store as its manual order.
+    """
+    return arrange_daily_log([*daily_log, entry])
+
+
 def arrange_task_list(entries: list[Entry]) -> list[Entry]:
     """Lay out a Monthly Log's task list, given in the order its Entries were logged.
 

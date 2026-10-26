@@ -707,6 +707,42 @@ def test_a_timed_entry_cannot_be_dragged():
         journal.move_entry(daily_log, _by_text(daily_log, "lunch").id, to=0)
 
 
+def test_an_untimed_entry_added_to_a_daily_log_goes_to_the_bottom():
+    *daily_log, added = _day(
+        ("buy milk", None),
+        ("standup", time(9, 30)),
+        ("lunch", time(12, 0)),
+        ("book a table", None),
+        ("call back", None),
+    )
+
+    assert _texts(journal.place_on_daily_log(added, daily_log)) == [
+        "buy milk",
+        "standup",
+        "lunch",
+        "book a table",
+        "call back",
+    ]
+
+
+def test_a_timed_entry_added_to_a_daily_log_slots_in_by_its_time():
+    *daily_log, added = _day(
+        ("buy milk", None),
+        ("standup", time(9, 30)),
+        ("prep notes", None),
+        ("lunch", time(12, 0)),
+        ("dentist", time(10, 0)),
+    )
+
+    assert _texts(journal.place_on_daily_log(added, daily_log)) == [
+        "buy milk",
+        "standup",
+        "prep notes",
+        "dentist",
+        "lunch",
+    ]
+
+
 def _logged(
     id: int,
     type: journal.EntryType,

@@ -37,6 +37,22 @@ SCOPE = "dots_and_dashes"
 SAVE_DURATION_BUCKETS = [0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 0.75, 1, 1.5, 2.5, 5, 10]
 
 
+def resource_for(settings: Settings) -> Resource:
+    """What every signal says about where it came from.
+
+    The namespace is the environment, so Grafana Cloud's job label reads
+    prod/dots-and-dashes or dev/dots-and-dashes: alerts select prod by job.
+    """
+    return Resource.create(
+        {
+            "service.name": settings.service_name,
+            "service.namespace": settings.environment,
+            "service.version": settings.release,
+            "deployment.environment.name": settings.environment,
+        }
+    )
+
+
 class Telemetry:
     """The app's tracer, meter and logger, and the exporters they feed.
 
@@ -82,13 +98,7 @@ class Telemetry:
     @classmethod
     def from_settings(cls, settings: Settings) -> "Telemetry":
         """Export to the OTLP endpoint the settings name, or nowhere without one."""
-        resource = Resource.create(
-            {
-                "service.name": settings.service_name,
-                "service.version": settings.release,
-                "deployment.environment.name": settings.environment,
-            }
-        )
+        resource = resource_for(settings)
         if not settings.otlp_endpoint:
             return cls(resource=resource)
         endpoint = settings.otlp_endpoint.rstrip("/")

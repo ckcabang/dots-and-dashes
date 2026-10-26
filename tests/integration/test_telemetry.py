@@ -4,7 +4,7 @@ The app exports to in-memory exporters here, in place of Grafana Cloud, so a
 test can read every span, metric and log the journey produced.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import pytest
 from opentelemetry.sdk._logs import ReadableLogRecord
@@ -14,7 +14,7 @@ from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from sqlalchemy import create_engine, text
 
-from dots_and_dashes.telemetry import Telemetry
+from dots_and_dashes.telemetry import Telemetry, resource_for
 from dots_and_dashes.web import create_app
 
 
@@ -67,13 +67,25 @@ class Signals:
         )
 
 
+RELEASE = "registry.fly.io/dots-and-dashes:abc123"
+
+
 @pytest.fixture
-def signals() -> Signals:
+def settings(settings):
+    """The app as deployed to prod."""
+    return replace(settings, environment="prod", release=RELEASE)
+
+
+@pytest.fixture
+def signals(settings) -> Signals:
     span_exporter = InMemorySpanExporter()
     metric_reader = InMemoryMetricReader()
     log_exporter = InMemoryLogRecordExporter()
     telemetry = Telemetry(
-        span_exporter=span_exporter, metric_reader=metric_reader, log_exporter=log_exporter
+        span_exporter=span_exporter,
+        metric_reader=metric_reader,
+        log_exporter=log_exporter,
+        resource=resource_for(settings),
     )
     return Signals(telemetry, span_exporter, metric_reader, log_exporter)
 
@@ -85,6 +97,29 @@ def client(settings, clock, logged_in, signals):
         raise_server_exceptions=False,
     ) as client:
         yield client
+
+
+def test_every_signal_names_its_environment_and_release(client, signals):
+    client.post("/api/entries", json={"text": "buy milk"})
+
+    data = signals.metric_reader.get_metrics_data()
+    assert data is not None
+    resources = (
+        [span.resource for span in signals.spans()]
+        + [record.resource for record in signals.logs()]
+        + [metrics.resource for metrics in data.resource_metrics]
+    )
+    expected = {
+        "service.name": "dots-and-dashes",
+        # Grafana Cloud folds the namespace into job, prod/dots-and-dashes,
+        # which the prod-only alert queries select on.
+        "service.namespace": "prod",
+        "deployment.environment.name": "prod",
+        "service.version": RELEASE,
+    }
+    assert len(resources) > 2
+    for resource in resources:
+        assert {key: resource.attributes.get(key) for key in expected} == expected
 
 
 def test_saving_an_entry_traces_the_request_and_the_database_write(client, signals):

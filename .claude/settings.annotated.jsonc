@@ -70,7 +70,8 @@
       ]
     },
     // The skills AGENTS.md and the agent definitions rely on (tdd, code-review, ...).
-    // Enabled here, not only in ~/.claude/settings.json, so cloud sessions and other clones get them too
+    // Enabled here, not only in ~/.claude/settings.json, so other local clones get them too.
+    // Cloud sessions don't install plugins from enabledPlugins (docs: cloud-environments, "What carries over")
     "enabledPlugins": {
       "mattpocock-skills@claude-plugins-official": true
     }

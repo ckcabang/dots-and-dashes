@@ -18,3 +18,7 @@ wheels/
 .claude/settings.local.json
 .claude/settings.local.annotated.jsonc
 .claude/.cc-writes/
+
+# Local-only Compose inputs (also sandbox placeholders when missing)
+.env
+docker-compose.override.yml

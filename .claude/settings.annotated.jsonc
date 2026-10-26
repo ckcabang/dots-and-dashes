@@ -30,7 +30,7 @@
         "Bash(docker ps *)"
       ],
       // These files decide what the commands above run outside the sandbox, so editing them prompts YOU.
-      // Covers the Edit and Write tools only, not shell commands
+      // Covers the Edit and Write tools; sandbox.filesystem.denyWrite below covers shell commands
       "ask": [
         "Edit(**/Makefile)",
         "Edit(**/Dockerfile)",
@@ -42,6 +42,18 @@
       ]
     },
     "sandbox": {
+      "filesystem": {
+        // Read-only for sandboxed shell commands, so changing what the excluded commands run goes
+        // through the Edit tool and its ask prompt. Paths are relative to the repo root (checked 2026-10-26).
+        // Missing files show up inside the sandbox as /dev/null placeholders; .gitignore keeps them out of git
+        "denyWrite": [
+          "Makefile",
+          "Dockerfile",
+          "docker-compose.yml",
+          "docker-compose.override.yml",
+          ".env"
+        ]
+      },
       // Run OUTSIDE the sandbox with full access and no credential masks, because they need the Docker socket.
       // Only an exact, standalone command matches: a cd/&& or env-var prefix, or any extra argument, runs it sandboxed.
       // Accepted risk: `make test`/`make check` run pytest, so agent-written test code runs outside the sandbox too.

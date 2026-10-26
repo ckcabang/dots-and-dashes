@@ -31,6 +31,15 @@
         ]
       },
       "sandbox": {
+        "filesystem": {
+          "denyWrite": [
+            "Makefile",
+            "Dockerfile",
+            "docker-compose.yml",
+            "docker-compose.override.yml",
+            ".env"
+          ]
+        },
         "excludedCommands": [
           "docker ps",
           "docker ps *",

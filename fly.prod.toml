@@ -1,0 +1,35 @@
+# The prod app, dots-and-dashes: deployed only by hand, with a chosen image
+# version, through .github/workflows/deploy-prod.yml (docs/runbooks/deploy.md).
+# It never builds: it runs images dev already built and ran. One-time setup is
+# scripts/provision-prod. Secrets (DATABASE_URL, SESSION_SECRET,
+# FLAG_MONTHLY_REVIEW) are Fly secrets.
+app = "dots-and-dashes"
+primary_region = "iad"
+
+# Runs in a throwaway Machine of the new image before any app Machine moves to
+# it. On a rollback the older image finds the database already migrated
+# further, and leaves the schema as it is.
+[deploy]
+  release_command = "dots-and-dashes migrate"
+
+[env]
+  SECURE_COOKIES = "on"
+
+# Prod is always on: the canary logs an Entry every minute.
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    method = "GET"
+    path = "/login"
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "10s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

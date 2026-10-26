@@ -12,7 +12,7 @@ Stage each scenario on dev with the chaos switch (`CHAOS_SAVE_ERROR_RATE`, `CHAO
 ## Bad deploy → roll back
 
 - **Signs**: save failures start right after a release; the errors' traces point at code that changed in it.
-- **Remedy**: redeploy the previous image tag.
+- **Remedy**: redeploy the previous image tag: run **Deploy to prod** with the version before the bad one ([deploy.md](deploy.md#roll-back)).
 - **Cleared when**: the failure rate falls back under the threshold.
 
 ## Broken feature flag → turn it off

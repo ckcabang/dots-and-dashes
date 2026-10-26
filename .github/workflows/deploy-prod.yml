@@ -1,0 +1,97 @@
+# Deploy a chosen version to prod, by hand: Actions → Deploy to prod → Run
+# workflow, with the commit SHA of a main build. Rolling back is the same run
+# with an earlier SHA. docs/runbooks/deploy.md has both; one-time setup is
+# scripts/provision-prod.
+#
+# Prod never builds. It runs the image deploy-dev.yml built for that commit
+# and dev already ran: this copies registry.fly.io/dots-and-dashes-dev:<sha>
+# into prod's own repository, registry.fly.io/dots-and-dashes:<sha>, then
+# deploys it. Each token can reach only its own app, and every version prod has
+# run stays in prod's repository to roll back to.
+name: Deploy to prod
+run-name: Deploy ${{ inputs.version }} to prod
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Commit SHA on main to deploy (an earlier one rolls back)
+        required: true
+        type: string
+
+# One prod deploy at a time; never cancel one mid-release.
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      VERSION: ${{ inputs.version }}
+      # Deploy tokens scoped to one app each.
+      DEV_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      PROD_TOKEN: ${{ secrets.FLY_PROD_API_TOKEN }}
+    steps:
+      # The run uses its ref's workflow and fly.prod.toml, so only main's reach prod.
+      - name: Refuse a run from any branch but main
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::Run Deploy to prod from main, not $GITHUB_REF: a branch's workflow and fly.prod.toml would reach prod"
+          exit 1
+
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: superfly/flyctl-actions/setup-flyctl@v1
+
+      - name: Resolve the version to a commit on main
+        run: |
+          if [[ ! "$VERSION" =~ ^[0-9a-f]{7,40}$ ]]; then
+            echo "::error::version must be a commit SHA (7 to 40 hex characters), not '$VERSION'"
+            exit 1
+          fi
+          if ! sha=$(git rev-parse --verify --quiet "$VERSION^{commit}"); then
+            echo "::error::$VERSION is not a commit in this repository"
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$sha" origin/main; then
+            echo "::error::$sha is not on main, so deploy-dev.yml never built it"
+            exit 1
+          fi
+          echo "SHA=$sha" >> "$GITHUB_ENV"
+          echo "DEV_IMAGE=registry.fly.io/dots-and-dashes-dev:$sha" >> "$GITHUB_ENV"
+          echo "PROD_IMAGE=registry.fly.io/dots-and-dashes:$sha" >> "$GITHUB_ENV"
+
+      - name: Copy dev's image into prod's registry
+        run: |
+          FLY_API_TOKEN="$PROD_TOKEN" flyctl auth docker
+          if docker manifest inspect "$PROD_IMAGE" >/dev/null 2>&1; then
+            echo "$PROD_IMAGE is already in prod's registry."
+            exit 0
+          fi
+          FLY_API_TOKEN="$DEV_TOKEN" flyctl auth docker
+          docker pull "$DEV_IMAGE"
+          docker tag "$DEV_IMAGE" "$PROD_IMAGE"
+          FLY_API_TOKEN="$PROD_TOKEN" flyctl auth docker
+          docker push "$PROD_IMAGE"
+
+      - name: Deploy it to prod
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_PROD_API_TOKEN }}
+        run: flyctl deploy --config fly.prod.toml --image "$PROD_IMAGE"
+
+      - name: Smoke-test prod
+        run: curl -fsS --retry 5 --retry-delay 5 --retry-all-errors -o /dev/null https://dots-and-dashes.fly.dev/login
+
+      - name: Summary
+        run: |
+          {
+            echo "### Deployed to prod"
+            echo
+            echo "- Version: [\`$SHA\`]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/commit/$SHA)"
+            echo "- Image: \`$PROD_IMAGE\`"
+            echo "- App: https://dots-and-dashes.fly.dev"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -74,8 +74,8 @@ def test_in_the_morning_daily_migration_reviews_earlier_days_and_plans_today(cli
 def test_open_tasks_are_grouped_under_their_anchor(client):
     for text in ["water plants", "o 14:00 team offsite", "book room", "o 09:00 standup"]:
         _log(client, text, "2026-10-24")
-    done = _log(client, "send agenda", "2026-10-24")
-    client.post(f"/api/entries/{done}/complete")
+    completed = _log(client, "send agenda", "2026-10-24")
+    client.post(f"/api/entries/{completed}/complete")
 
     assert _grouped(_review(client)) == [
         ("2026-10-24", None, ["water plants"]),

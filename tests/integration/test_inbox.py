@@ -14,16 +14,25 @@ def client(settings, clock, logged_in):
 def test_a_capture_waits_in_the_inbox_unclassified(client):
     captured = client.post("/api/captures", json={"text": "o 9am dentist"})
 
-    assert captured.status_code == 201
-    inbox = client.get("/api/inbox").json()
+    assert captured.status_code == 201, captured.text
+    inbox = _read(client, "/api/inbox")
     assert inbox["count"] == 1
     [capture] = inbox["captures"]
     assert capture["text"] == "o 9am dentist"
-    assert client.get("/api/daily-logs/today").json()["entries"] == []
+    assert _read(client, "/api/daily-logs/today")["entries"] == []
+
+
+def _read(client, path: str):
+    """GET a JSON page, failing on its status with the body, not later on a missing key."""
+    response = client.get(path)
+    assert response.status_code == 200, response.text
+    return response.json()
 
 
 def _capture(client, text: str) -> int:
-    return client.post("/api/captures", json={"text": text}).json()["id"]
+    captured = client.post("/api/captures", json={"text": text})
+    assert captured.status_code == 201, captured.text
+    return captured.json()["id"]
 
 
 def _texts(entries):
@@ -37,8 +46,8 @@ def test_triage_places_a_capture_on_a_days_daily_log_and_empties_the_inbox(clien
         f"/api/captures/{capture_id}/triage", json={"to": "day", "date": "2026-10-28"}
     )
 
-    assert triaged.status_code == 201
-    [entry] = client.get("/api/daily-logs/2026-10-28").json()["entries"]
+    assert triaged.status_code == 201, triaged.text
+    [entry] = _read(client, "/api/daily-logs/2026-10-28")["entries"]
     assert (entry["type"], entry["priority"], entry["time"], entry["text"]) == (
         "event",
         True,
@@ -46,7 +55,7 @@ def test_triage_places_a_capture_on_a_days_daily_log_and_empties_the_inbox(clien
         "dentist",
     )
     assert triaged.json() == entry
-    assert client.get("/api/inbox").json() == {"count": 0, "captures": []}
+    assert _read(client, "/api/inbox") == {"count": 0, "captures": []}
 
 
 def test_triage_places_a_capture_on_the_current_months_task_list(client):
@@ -54,10 +63,10 @@ def test_triage_places_a_capture_on_the_current_months_task_list(client):
 
     triaged = client.post(f"/api/captures/{capture_id}/triage", json={"to": "month"})
 
-    assert triaged.status_code == 201
-    [entry] = client.get("/api/monthly-logs/2026-10").json()["tasks"]
+    assert triaged.status_code == 201, triaged.text
+    [entry] = _read(client, "/api/monthly-logs/2026-10")["tasks"]
     assert (entry["text"], entry["priority"], entry["state"]) == ("renew passport", True, "open")
-    assert client.get("/api/inbox").json()["count"] == 0
+    assert _read(client, "/api/inbox")["count"] == 0
 
 
 @pytest.mark.parametrize("on", [None, "2027-03-03"])
@@ -68,18 +77,18 @@ def test_triage_places_a_capture_in_the_future_log_with_an_optional_date(client,
         f"/api/captures/{capture_id}/triage", json={"to": "future", "month": "2027-03", "date": on}
     )
 
-    assert triaged.status_code == 201
-    future_log = client.get("/api/future-log").json()
+    assert triaged.status_code == 201, triaged.text
+    future_log = _read(client, "/api/future-log")
     [march] = [bucket for bucket in future_log["months"] if bucket["month"] == "2027-03"]
     [entry] = march["entries"]
     assert (entry["type"], entry["text"], entry["day"]) == ("event", "conference", on)
-    assert client.get("/api/inbox").json()["count"] == 0
+    assert _read(client, "/api/inbox")["count"] == 0
 
 
 def test_the_inbox_shows_what_triage_suggests_for_each_capture(client):
     _capture(client, "!- 2:30pm idea for the garden")
 
-    [capture] = client.get("/api/inbox").json()["captures"]
+    [capture] = _read(client, "/api/inbox")["captures"]
 
     assert capture["suggestion"] == {
         "type": "note",
@@ -94,12 +103,13 @@ def test_the_inbox_shows_what_triage_suggests_for_each_capture(client):
 def test_an_adjusted_suggestion_is_what_gets_placed(client):
     capture_id = _capture(client, "o 9am dentist")
 
-    client.post(
+    triaged = client.post(
         f"/api/captures/{capture_id}/triage",
         json={"to": "day", "text": "*. book the dentist"},
     )
 
-    [entry] = client.get("/api/daily-logs/today").json()["entries"]
+    assert triaged.status_code == 201, triaged.text
+    [entry] = _read(client, "/api/daily-logs/today")["entries"]
     assert (entry["type"], entry["priority"], entry["time"], entry["text"]) == (
         "task",
         True,
@@ -113,16 +123,16 @@ def test_a_refused_triage_leaves_the_capture_in_the_inbox(client):
 
     refused = client.post(f"/api/captures/{capture_id}/triage", json={"to": "month"})
 
-    assert refused.status_code == 422
-    assert client.get("/api/monthly-logs/2026-10").json()["tasks"] == []
-    assert client.get("/api/inbox").json()["count"] == 1
+    assert refused.status_code == 422, refused.text
+    assert _read(client, "/api/monthly-logs/2026-10")["tasks"] == []
+    assert _read(client, "/api/inbox")["count"] == 1
 
 
 def test_a_blank_capture_is_refused(client):
     refused = client.post("/api/captures", json={"text": "  "})
 
-    assert refused.status_code == 422
-    assert client.get("/api/inbox").json()["count"] == 0
+    assert refused.status_code == 422, refused.text
+    assert _read(client, "/api/inbox")["count"] == 0
 
 
 def test_a_capture_can_be_deleted(client):
@@ -131,23 +141,23 @@ def test_a_capture_can_be_deleted(client):
 
     response = client.delete(f"/api/captures/{deleted}")
 
-    assert response.status_code == 204
-    inbox = client.get("/api/inbox").json()
+    assert response.status_code == 204, response.text
+    inbox = _read(client, "/api/inbox")
     assert [capture["id"] for capture in inbox["captures"]] == [kept]
-    assert client.get("/api/daily-logs/today").json()["entries"] == []
+    assert _read(client, "/api/daily-logs/today")["entries"] == []
 
 
 def test_the_mobile_capture_page_saves_raw_text_to_the_inbox(client):
     page = client.get("/capture")
-    assert page.status_code == 200
+    assert page.status_code == 200, page.text
     assert 'name="viewport"' in page.text
 
     submitted = client.post("/capture", data={"text": "o 9am dentist"}, follow_redirects=False)
 
-    assert submitted.status_code == 303
+    assert submitted.status_code == 303, submitted.text
     assert submitted.headers["location"] == "/capture?captured=1"
-    assert _texts(client.get("/api/inbox").json()["captures"]) == ["o 9am dentist"]
-    assert client.get("/api/daily-logs/today").json()["entries"] == []
+    assert _texts(_read(client, "/api/inbox")["captures"]) == ["o 9am dentist"]
+    assert _read(client, "/api/daily-logs/today")["entries"] == []
 
 
 def test_the_daily_log_shows_the_inbox_count(client):
@@ -156,6 +166,7 @@ def test_the_daily_log_shows_the_inbox_count(client):
 
     page = client.get("/")
 
+    assert page.status_code == 200, page.text
     assert 'href="/inbox"' in page.text
     assert "Inbox (2)" in page.text
 
@@ -166,7 +177,7 @@ def test_the_inbox_page_offers_the_oldest_capture_to_triage_with_its_suggestion(
 
     page = client.get("/inbox")
 
-    assert page.status_code == 200
+    assert page.status_code == 200, page.text
     assert 'value="*o 09:00 dentist"' in page.text
     assert "Event" in page.text
     assert "call the plumber" in page.text
@@ -181,18 +192,20 @@ def test_triage_from_the_page_reads_empty_optional_fields_as_unset(client):
         data={"text": "o 9am dentist", "to": "day", "date": "", "month": ""},
         follow_redirects=False,
     )
-    client.post(
+    placed_in_the_future = client.post(
         f"/inbox/{to_future}/triage",
         data={"text": "o conference", "to": "future", "date": "", "month": "2027-03"},
+        follow_redirects=False,
     )
 
-    assert placed.status_code == 303
+    assert placed.status_code == 303, placed.text
+    assert placed_in_the_future.status_code == 303, placed_in_the_future.text
     assert placed.headers["location"] == "/inbox"
-    assert _texts(client.get("/api/daily-logs/today").json()["entries"]) == ["dentist"]
-    future_log = client.get("/api/future-log").json()
+    assert _texts(_read(client, "/api/daily-logs/today")["entries"]) == ["dentist"]
+    future_log = _read(client, "/api/future-log")
     [march] = [bucket for bucket in future_log["months"] if bucket["month"] == "2027-03"]
     assert _texts(march["entries"]) == ["conference"]
-    assert client.get("/api/inbox").json()["count"] == 0
+    assert _read(client, "/api/inbox")["count"] == 0
 
 
 def test_a_refused_triage_from_the_page_says_why_and_keeps_the_adjustment(client):
@@ -203,10 +216,10 @@ def test_a_refused_triage_from_the_page_says_why_and_keeps_the_adjustment(client
         data={"text": "o big conference", "to": "month", "date": "", "month": ""},
     )
 
-    assert refused.status_code == 422
+    assert refused.status_code == 422, refused.text
     assert 'role="alert"' in refused.text
     assert 'value="o big conference"' in refused.text
-    assert client.get("/api/inbox").json()["count"] == 1
+    assert _read(client, "/api/inbox")["count"] == 1
 
 
 @pytest.mark.parametrize(
@@ -224,13 +237,13 @@ def test_triage_from_the_page_refuses_an_impossible_date_or_month(client, to, on
         data={"text": "o big conference", "to": to, "date": on, "month": month},
     )
 
-    assert refused.status_code == 422
+    assert refused.status_code == 422, refused.text
     assert refused.headers["content-type"].startswith("text/html")
     assert f'<p role="alert">{reason.replace("\'", "&#39;")}</p>' in refused.text
     assert 'value="o big conference"' in refused.text
     assert f'value="{on}"' in refused.text
     assert f'value="{month}"' in refused.text
-    assert client.get("/api/inbox").json()["count"] == 1
+    assert _read(client, "/api/inbox")["count"] == 1
 
 
 @pytest.mark.parametrize(
@@ -245,9 +258,9 @@ def test_the_api_refuses_an_impossible_triage_date_or_month(client, placing):
 
     refused = client.post(f"/api/captures/{capture_id}/triage", json=placing)
 
-    assert refused.status_code == 422
+    assert refused.status_code == 422, refused.text
     assert "detail" in refused.json()
-    assert client.get("/api/inbox").json()["count"] == 1
+    assert _read(client, "/api/inbox")["count"] == 1
 
 
 def test_a_capture_is_deleted_from_the_page(client):
@@ -255,9 +268,9 @@ def test_a_capture_is_deleted_from_the_page(client):
 
     deleted = client.post(f"/inbox/{capture_id}/delete", follow_redirects=False)
 
-    assert deleted.status_code == 303
+    assert deleted.status_code == 303, deleted.text
     assert deleted.headers["location"] == "/inbox"
-    assert client.get("/api/inbox").json()["count"] == 0
+    assert _read(client, "/api/inbox")["count"] == 0
 
 
 def test_another_users_inbox_is_out_of_reach(settings, clock, logged_in, create_user):
@@ -267,7 +280,8 @@ def test_another_users_inbox_is_out_of_reach(settings, clock, logged_in, create_
     other = create_user("canary@example.com", canary=True)
 
     with logged_in(app, other) as canary:
-        assert canary.get("/api/inbox").json() == {"count": 0, "captures": []}
-        assert canary.delete(f"/api/captures/{capture_id}").status_code == 404
+        assert _read(canary, "/api/inbox") == {"count": 0, "captures": []}
+        deleted = canary.delete(f"/api/captures/{capture_id}")
+        assert deleted.status_code == 404, deleted.text
         refused = canary.post(f"/api/captures/{capture_id}/triage", json={"to": "day"})
-        assert refused.status_code == 404
+        assert refused.status_code == 404, refused.text

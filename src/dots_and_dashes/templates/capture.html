@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+
+{% block title %}Capture · Dots & Dashes{% endblock %}
+
+{% block content %}
+<main class="capture">
+  <h1>Capture</h1>
+  <form method="post" action="/capture">
+    {# Raw text, saved to the Inbox as typed: a Prefix is read later, in Triage. #}
+    <input name="text" aria-label="Capture" autocomplete="off" autocapitalize="off"
+           enterkeyhint="send" autofocus required pattern=".*\S.*">
+    <button>Save to Inbox</button>
+  </form>
+  {% if captured %}<p role="status">Captured. It's waiting in the Inbox.</p>{% endif %}
+</main>
+
+<script>
+  // The autofocus attribute is not always honoured, so typing starts in the box.
+  document.querySelector('.capture [name="text"]').focus();
+</script>
+{% endblock %}

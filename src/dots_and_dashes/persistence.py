@@ -384,6 +384,11 @@ def inbox(session: Session) -> list[journal.Capture]:
     return [row.to_capture() for row in rows]
 
 
+def inbox_count(session: Session) -> int:
+    """How many Captures are waiting in the Inbox."""
+    return session.scalar(select(func.count(CaptureRow.id))) or 0
+
+
 def _capture_row(session: Session, capture_id: int) -> CaptureRow:
     row = session.get(CaptureRow, capture_id)
     if row is None:

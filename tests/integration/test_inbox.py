@@ -137,6 +137,88 @@ def test_a_capture_can_be_deleted(client):
     assert client.get("/api/daily-logs/today").json()["entries"] == []
 
 
+def test_the_mobile_capture_page_saves_raw_text_to_the_inbox(client):
+    page = client.get("/capture")
+    assert page.status_code == 200
+    assert 'name="viewport"' in page.text
+
+    submitted = client.post("/capture", data={"text": "o 9am dentist"}, follow_redirects=False)
+
+    assert submitted.status_code == 303
+    assert submitted.headers["location"] == "/capture?captured=1"
+    assert _texts(client.get("/api/inbox").json()["captures"]) == ["o 9am dentist"]
+    assert client.get("/api/daily-logs/today").json()["entries"] == []
+
+
+def test_the_daily_log_shows_the_inbox_count(client):
+    _capture(client, "call the plumber")
+    _capture(client, "o 9am dentist")
+
+    page = client.get("/")
+
+    assert 'href="/inbox"' in page.text
+    assert "Inbox (2)" in page.text
+
+
+def test_the_inbox_page_offers_the_oldest_capture_to_triage_with_its_suggestion(client):
+    _capture(client, "*o 9am dentist")
+    _capture(client, "call the plumber")
+
+    page = client.get("/inbox")
+
+    assert page.status_code == 200
+    assert 'value="*o 09:00 dentist"' in page.text
+    assert "Event" in page.text
+    assert "call the plumber" in page.text
+
+
+def test_triage_from_the_page_reads_empty_optional_fields_as_unset(client):
+    to_day = _capture(client, "o 9am dentist")
+    to_future = _capture(client, "conference")
+
+    placed = client.post(
+        f"/inbox/{to_day}/triage",
+        data={"text": "o 9am dentist", "to": "day", "date": "", "month": ""},
+        follow_redirects=False,
+    )
+    client.post(
+        f"/inbox/{to_future}/triage",
+        data={"text": "o conference", "to": "future", "date": "", "month": "2027-03"},
+    )
+
+    assert placed.status_code == 303
+    assert placed.headers["location"] == "/inbox"
+    assert _texts(client.get("/api/daily-logs/today").json()["entries"]) == ["dentist"]
+    future_log = client.get("/api/future-log").json()
+    [march] = [bucket for bucket in future_log["months"] if bucket["month"] == "2027-03"]
+    assert _texts(march["entries"]) == ["conference"]
+    assert client.get("/api/inbox").json()["count"] == 0
+
+
+def test_a_refused_triage_from_the_page_says_why_and_keeps_the_adjustment(client):
+    capture_id = _capture(client, "conference")
+
+    refused = client.post(
+        f"/inbox/{capture_id}/triage",
+        data={"text": "o big conference", "to": "month", "date": "", "month": ""},
+    )
+
+    assert refused.status_code == 422
+    assert 'role="alert"' in refused.text
+    assert 'value="o big conference"' in refused.text
+    assert client.get("/api/inbox").json()["count"] == 1
+
+
+def test_a_capture_is_deleted_from_the_page(client):
+    capture_id = _capture(client, "asdfgh")
+
+    deleted = client.post(f"/inbox/{capture_id}/delete", follow_redirects=False)
+
+    assert deleted.status_code == 303
+    assert deleted.headers["location"] == "/inbox"
+    assert client.get("/api/inbox").json()["count"] == 0
+
+
 def test_another_users_inbox_is_out_of_reach(settings, clock, logged_in, create_user):
     app = create_app(settings, clock=clock)
     with logged_in(app) as client:

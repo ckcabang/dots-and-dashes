@@ -430,6 +430,10 @@ def _delete(session: Session, entry_id: int) -> None:
     persistence.delete_entry(session, entry_id)
 
 
+class NeedsAMonthError(ValueError):
+    """Raised when a Capture is placed in the Future Log without a month."""
+
+
 def _triage_destination(body: TriageIn, today: date) -> journal.Destination:
     match body.to:
         case "day":
@@ -438,7 +442,7 @@ def _triage_destination(body: TriageIn, today: date) -> journal.Destination:
             return journal.Destination.monthly_log(today)
         case "future" if body.month:
             return journal.Destination.future_log(_parse_month(body.month), on=body.on)
-    raise HTTPException(422, "the Future Log needs a month")
+    raise NeedsAMonthError("the Future Log needs a month")
 
 
 def _triage(session: Session, capture_id: int, body: TriageIn, today: date) -> journal.Entry:
@@ -487,6 +491,7 @@ REFUSED_AS_INVALID: tuple[type[ValueError], ...] = (
     journal.NestedNoteMoveError,
     journal.UntimedEntryError,
     journal.NestingError,
+    NeedsAMonthError,
 )
 
 
@@ -583,6 +588,7 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
                 "previous_day": day - timedelta(days=1),
                 "next_day": day + timedelta(days=1),
                 "entries": persistence.entries_on(session, day),
+                "inbox_count": persistence.inbox_count(session),
             },
         )
 
@@ -951,6 +957,87 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
                 ),
             )
         )
+
+    # Capture on the go: a minimal page for the phone that saves raw text to
+    # the Inbox, unclassified.
+    @app.get("/capture", response_class=HTMLResponse)
+    def capture_page(
+        request: Request, today: TodayDep, captured: bool = False
+    ) -> Response:
+        return templates.TemplateResponse(
+            request, "capture.html", {"today": today, "captured": captured}
+        )
+
+    @app.post("/capture")
+    def capture_from_page(text: Annotated[str, Form()], session: SessionDep) -> Response:
+        persistence.add_capture(session, journal.capture(text))
+        return RedirectResponse("/capture?captured=1", status_code=303)
+
+    def render_inbox(
+        request: Request,
+        session: Session,
+        today: date,
+        capture_id: int | None = None,
+        *,
+        adjusted: TriageIn | None = None,
+        refused: str | None = None,
+    ) -> Response:
+        """The Inbox, Triaging one Capture: the one asked for, or else the
+        first captured."""
+        captures = persistence.inbox(session)
+        if capture_id is not None:
+            triaging: journal.Capture | None = persistence.get_capture(session, capture_id)
+        else:
+            triaging = captures[0] if captures else None
+        suggestion = journal.triage_suggestion(triaging) if triaging else None
+        return templates.TemplateResponse(
+            request,
+            "inbox.html",
+            {
+                "today": today,
+                "captures": captures,
+                "triaging": triaging,
+                "suggestion": suggestion,
+                "typed": adjusted.text if adjusted else suggestion and journal.as_typed(suggestion),
+                "adjusted": adjusted,
+                "refused": refused,
+                "this_month": journal.month_of(today),
+                "first_future_month": journal.next_month(journal.month_of(today)),
+            },
+            status_code=422 if refused else 200,
+        )
+
+    @app.get("/inbox", response_class=HTMLResponse)
+    def inbox_page(request: Request, session: SessionDep, today: TodayDep) -> Response:
+        return render_inbox(request, session, today)
+
+    @app.get("/inbox/{capture_id}", response_class=HTMLResponse)
+    def triage_page(
+        request: Request, capture_id: int, session: SessionDep, today: TodayDep
+    ) -> Response:
+        return render_inbox(request, session, today, capture_id)
+
+    @app.post("/inbox/{capture_id}/triage")
+    def triage_from_page(
+        request: Request,
+        capture_id: int,
+        body: Annotated[TriageIn, Form()],
+        session: SessionDep,
+        today: TodayDep,
+    ) -> Response:
+        try:
+            _triage(session, capture_id, body, today)
+        except REFUSED_AS_INVALID as refused:
+            # Refused before anything is written, so the Capture stays put.
+            return render_inbox(
+                request, session, today, capture_id, adjusted=body, refused=str(refused)
+            )
+        return RedirectResponse("/inbox", status_code=303)
+
+    @app.post("/inbox/{capture_id}/delete")
+    def delete_capture_from_page(capture_id: int, session: SessionDep) -> Response:
+        persistence.delete_capture(session, capture_id)
+        return RedirectResponse("/inbox", status_code=303)
 
     @app.post("/api/captures", status_code=201)
     def create_capture(body: NewCaptureIn, session: SessionDep) -> CaptureOut:

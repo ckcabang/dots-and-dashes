@@ -21,6 +21,11 @@
     .day-nav { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; }
     .login label { display: block; margin: 0.5rem 0; }
     .logout { text-align: right; }
+    .capture input[name="text"], .capture button { font-size: 1.25rem; padding: 0.75rem; }
+    .capture button { width: 100%; margin-top: 0.5rem; }
+    .triage fieldset label { display: block; margin: 0.25rem 0; }
+    .triage:focus { outline: 2px solid #99c; }
+    .capture-text { font-family: ui-monospace, monospace; margin: 0.5rem 0; }
   </style>
 </head>
 <body{% if today is defined %} data-today="{{ today.isoformat() }}"{% endif %}>

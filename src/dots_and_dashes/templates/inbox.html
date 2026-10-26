@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+
+{% block title %}Inbox · Dots & Dashes{% endblock %}
+
+{% block content %}
+<nav class="day-nav" aria-label="Logs">
+  <a href="/">← Today</a>
+  <a href="/capture">Capture</a>
+</nav>
+
+<main id="inbox">
+  <h1>Inbox ({{ captures | length }})</h1>
+
+  {% if triaging %}
+  {%- set to = adjusted.to if adjusted else "day" -%}
+  <section id="triage" class="triage" tabindex="-1" aria-labelledby="triage-heading">
+    <h2 id="triage-heading">Triage</h2>
+    <blockquote class="capture-text">{{ triaging.text }}</blockquote>
+    <p class="suggestion">Suggested:
+      <strong>{{ suggestion.type | capitalize }}</strong>
+      {%- if suggestion.priority %}, Priority{% endif %}
+      {%- if suggestion.inspiration %}, Inspiration{% endif %}
+      {%- if suggestion.time %}, at <time>{{ suggestion.time.strftime('%H:%M') }}</time>{% endif %}.
+      Adjust it by editing the Prefix.
+    </p>
+    {% if refused %}<p role="alert">{{ refused }}</p>{% endif %}
+
+    <form method="post" action="/inbox/{{ triaging.id }}/triage">
+      <label>Entry <input name="text" value="{{ typed }}" autocomplete="off" autofocus required pattern=".*\S.*"></label>
+      <fieldset>
+        <legend>Place on</legend>
+        <label><input type="radio" name="to" value="day"{% if to == "day" %} checked{% endif %}> a Daily Log</label>
+        <label><input type="radio" name="to" value="month"{% if to == "month" %} checked{% endif %}> {{ this_month.strftime("%B") }}'s task list</label>
+        <label><input type="radio" name="to" value="future"{% if to == "future" %} checked{% endif %}> the Future Log</label>
+        <label>Date <input name="date" value="{{ adjusted.on or '' if adjusted else '' }}" placeholder="YYYY-MM-DD"
+               pattern="\d{4}-\d{2}-\d{2}" autocomplete="off" aria-describedby="date-help"></label>
+        <small id="date-help">A Daily Log's day, today's if empty; optional in the Future Log.</small>
+        <label>Future Log month <input name="month" value="{{ adjusted.month or '' if adjusted else '' }}"
+               placeholder="{{ first_future_month.strftime('%Y-%m') }}" pattern="\d{4}-\d{2}" autocomplete="off"></label>
+      </fieldset>
+      <button>Place</button>
+    </form>
+    <form id="delete-capture" method="post" action="/inbox/{{ triaging.id }}/delete">
+      <button>Delete</button>
+    </form>
+    <p>
+      <kbd>Enter</kbd> places it, <kbd>Tab</kbd> moves to where it goes.
+      <kbd>Escape</kbd> leaves a field; then <kbd>Delete</kbd> deletes the Capture.
+    </p>
+  </section>
+  {% else %}
+  <p>The Inbox is empty.</p>
+  {% endif %}
+
+  {% if captures %}
+  <section aria-labelledby="waiting-heading">
+    <h2 id="waiting-heading">Waiting</h2>
+    <ol class="captures">
+      {% for capture in captures %}
+      <li><a href="/inbox/{{ capture.id }}"{% if capture == triaging %} aria-current="true"{% endif %}>{{ capture.text }}</a></li>
+      {% endfor %}
+    </ol>
+  </section>
+  {% endif %}
+</main>
+
+<script>
+  // Typing starts in the Entry field, holding the suggestion to adjust.
+  document.querySelector('#triage [name="text"]')?.focus();
+
+  // Escape leaves a field for the Capture; there, Delete or Backspace deletes
+  // it after confirming, as for an Entry.
+  document.addEventListener("keydown", (event) => {
+    const triage = document.getElementById("triage");
+    if (!triage || event.ctrlKey || event.metaKey || event.altKey) return;
+    const field = event.target.closest("input, textarea, select");
+    if (event.key === "Escape" && field) {
+      event.preventDefault();
+      triage.focus();
+    } else if ((event.key === "Delete" || event.key === "Backspace") && event.target === triage) {
+      event.preventDefault();
+      if (confirm("Delete this Capture for good?")) {
+        document.getElementById("delete-capture").requestSubmit();
+      }
+    }
+  });
+</script>
+{% endblock %}

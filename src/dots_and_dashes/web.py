@@ -319,6 +319,8 @@ def _today(request: Request, user: UserDep) -> date:
 # Scoped to the function so its writes commit before the response is sent;
 # the default scope would commit after, racing the browser's next request.
 SessionDep = Annotated[Session, Depends(_session, scope="function")]
+TodayDep = Annotated[date, Depends(_today)]
+MonthDep = Annotated[date, Depends(_month_param)]
 
 
 def _save_chaos(request: Request, session: SessionDep) -> None:
@@ -328,8 +330,7 @@ def _save_chaos(request: Request, session: SessionDep) -> None:
     if chaos.on:
         session.connection()
         chaos.save()
-TodayDep = Annotated[date, Depends(_today)]
-MonthDep = Annotated[date, Depends(_month_param)]
+
 
 # The Task State changes the keyboard and the API can ask for, by URL name;
 # any other name is refused as invalid.

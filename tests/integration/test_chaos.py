@@ -101,6 +101,27 @@ def test_the_pool_size_is_read_from_the_environment_and_a_save_traces_its_checko
     assert checkout.attributes and checkout.attributes["db.client.connection.max"] == 3
 
 
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("CHAOS_SAVE_ERROR_RATE", "abc"),
+        ("CHAOS_SAVE_ERROR_RATE", "1.5"),
+        ("CHAOS_SAVE_LATENCY_MS", "x"),
+        ("CHAOS_SAVE_LATENCY_MS", "-1"),
+        ("DB_POOL_SIZE", "x"),
+        ("DB_POOL_SIZE", "0"),
+    ],
+)
+def test_a_bad_switch_value_stops_the_app_starting_and_names_the_switch(
+    settings, monkeypatch, name, value
+):
+    monkeypatch.setenv("DATABASE_URL", settings.database_url)
+    monkeypatch.setenv(name, value)
+
+    with pytest.raises(ValueError, match=name):
+        create_app()
+
+
 def test_an_exhausted_pool_shows_as_a_long_connection_checkout(settings, start, signals):
     # One connection, held for 300ms by each slow save: the second save waits.
     with start(replace(settings, db_pool_size=1, chaos_save_latency_ms=300)) as client:

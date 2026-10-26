@@ -54,15 +54,22 @@ def _flag(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _number[N: (int, float)](name: str, kind: type[N], value: str) -> N:
+    try:
+        return kind(value)
+    except ValueError:
+        raise ValueError(f"{name} must be a number, not {value!r}") from None
+
+
 def _rate(name: str) -> float:
-    rate = float(os.environ.get(name) or 0)
+    rate = _number(name, float, os.environ.get(name) or "0")
     if not 0 <= rate <= 1:
         raise ValueError(f"{name} must be between 0 and 1, not {rate}")
     return rate
 
 
 def _milliseconds(name: str) -> int:
-    milliseconds = int(os.environ.get(name) or 0)
+    milliseconds = _number(name, int, os.environ.get(name) or "0")
     if milliseconds < 0:
         raise ValueError(f"{name} must not be negative, not {milliseconds}")
     return milliseconds
@@ -71,6 +78,6 @@ def _milliseconds(name: str) -> int:
 def _pool_size(name: str) -> int | None:
     if not (value := os.environ.get(name)):
         return None
-    if (size := int(value)) < 1:
+    if (size := _number(name, int, value)) < 1:
         raise ValueError(f"{name} must be at least 1, not {size}")
     return size

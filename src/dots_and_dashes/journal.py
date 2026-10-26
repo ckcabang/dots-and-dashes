@@ -1108,7 +1108,11 @@ def triage(
         return log_entry(text, on=to.day)
     if to.location is Location.MONTH and to.month is not None:
         if to.month != month_of(today):
-            raise PlacementError("a Capture goes only on the current month's task list")
+            # Most likely a Future Log month left filled in, so say to clear it.
+            raise PlacementError(
+                "a Capture goes only on the current month's task list: "
+                "clear the Future Log month to place it there"
+            )
         return log_month_entry(text, month=to.month, today=today)
     if to.location is Location.FUTURE and to.month is not None:
         return log_future_entry(text, month=to.month, today=today, on=to.day)

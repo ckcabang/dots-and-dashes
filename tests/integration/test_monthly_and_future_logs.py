@@ -134,6 +134,44 @@ def test_the_future_log_page_adds_entries_with_an_optional_date(client):
     assert "file taxes" in page
 
 
+@pytest.mark.parametrize(
+    ("month", "on", "reason"),
+    [
+        pytest.param("2026-13", "", "'2026-13' is not a month", id="month"),
+        pytest.param("2027-02", "2027-02-30", "'2027-02-30' is not a date", id="date"),
+    ],
+)
+def test_the_future_log_page_refuses_an_impossible_month_or_date(client, month, on, reason):
+    refused = client.post(
+        "/future/entries", data={"text": "o big conference", "month": month, "date": on}
+    )
+
+    assert refused.status_code == 422
+    assert refused.headers["content-type"].startswith("text/html")
+    assert f'<p role="alert">{reason.replace("\'", "&#39;")}</p>' in refused.text
+    assert 'value="o big conference"' in refused.text
+    assert f'value="{month}"' in refused.text
+    assert f'value="{on}"' in refused.text
+    assert all(not bucket["entries"] for bucket in client.get("/api/future-log").json()["months"])
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param({"text": "o big conference", "month": "2026-13"}, id="month"),
+        pytest.param(
+            {"text": "o big conference", "month": "2027-02", "date": "2027-02-30"}, id="date"
+        ),
+    ],
+)
+def test_the_api_refuses_an_impossible_future_log_month_or_date(client, body):
+    refused = client.post("/api/future-log/entries", json=body)
+
+    assert refused.status_code == 422
+    assert "detail" in refused.json()
+    assert all(not bucket["entries"] for bucket in client.get("/api/future-log").json()["months"])
+
+
 def test_completing_and_editing_a_monthly_log_task_keeps_it_on_the_task_list(client):
     task = client.post("/api/monthly-logs/2026-10/entries", json={"text": "renew passport"}).json()
 

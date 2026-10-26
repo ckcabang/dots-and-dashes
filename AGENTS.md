@@ -23,6 +23,6 @@ Run `make check`, `make test`, `make test-integration`, `make test-browser`, `ma
 
 ## Agent skills
 
-- **Issue tracker**: GitHub Issues on `ckcabang/dots-and-dashes`, through the `gh` CLI. See `docs/agents/issue-tracker.md`.
+- **Issue tracker**: GitHub Issues on `ckcabang/dots-and-dashes`, through the `gh` CLI, reading with `--json` (plain `gh issue view` fails). See `docs/agents/issue-tracker.md`.
 - **Triage labels**: the five defaults as-is (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
 - **Domain docs**: single-context, one `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.

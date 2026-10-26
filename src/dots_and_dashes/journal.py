@@ -1,6 +1,7 @@
 """The Journal domain module: every bullet journal rule, with no I/O."""
 
 import re
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta, tzinfo
 from enum import StrEnum
@@ -15,6 +16,8 @@ class EntryType(StrEnum):
 class TaskState(StrEnum):
     OPEN = "open"
     COMPLETED = "completed"
+    MIGRATED = "migrated"
+    SCHEDULED = "scheduled"
     CANCELLED = "cancelled"
 
 
@@ -133,6 +136,8 @@ class NewEntry:
     day: date | None  # a Daily Log's date; optional in the Future Log
     location: Location = Location.DAY
     month: date | None = None  # for the Monthly Log's task list and the Future Log
+    # The copy this one was migrated or scheduled from, in its Migration Chain.
+    migrated_from_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -151,6 +156,10 @@ class Entry:
     month: date | None = None  # for the Monthly Log's task list and the Future Log
     # A Nested Note's parent: the Task or Event it is attached to.
     parent_id: int | None = None
+    # The copy this one was migrated or scheduled from, in its Migration Chain.
+    migrated_from_id: int | None = None
+    # Its Migration Chain's Migration Count, worked out when it is loaded.
+    migration_count: int = 0
 
 
 def log_entry(text: str, *, on: date) -> NewEntry:
@@ -197,11 +206,29 @@ def arrange_daily_log(entries: list[Entry]) -> list[Entry]:
     Nested Note sits under its parent, in the order it was logged, so it
     moves wherever its parent goes.
     """
+    return _with_nested_notes(entries, daily_log_order)
+
+
+def arrange_task_list(entries: list[Entry]) -> list[Entry]:
+    """Lay out a Monthly Log's task list, given in the order its Entries were logged.
+
+    Entries stay in logged order, each with its Nested Notes under it.
+    """
+    return _with_nested_notes(entries, list)
+
+
+def _with_nested_notes(
+    entries: list[Entry], order: Callable[[list[Entry]], list[Entry]]
+) -> list[Entry]:
+    """Order the Entries that aren't Nested Notes, then put each Nested Note under its parent.
+
+    A Nested Note whose parent isn't among the Entries is left out.
+    """
     nested: dict[int, list[Entry]] = {}
     for entry in entries:
         if entry.parent_id is not None:
             nested.setdefault(entry.parent_id, []).append(entry)
-    ordered = daily_log_order([entry for entry in entries if entry.parent_id is None])
+    ordered = order([entry for entry in entries if entry.parent_id is None])
     return [shown for entry in ordered for shown in [entry, *nested.get(entry.id, [])]]
 
 
@@ -447,7 +474,10 @@ def future_log(entries: list[Entry], *, today: date) -> list[FutureMonth]:
     return [
         FutureMonth(
             month=month,
-            entries=sorted(by_month[month], key=lambda e: (e.day is None, e.day or month)),
+            entries=_with_nested_notes(
+                by_month[month],
+                lambda entries: sorted(entries, key=lambda e: (e.day is None, e.day or month)),
+            ),
         )
         for month in sorted(by_month)
     ]
@@ -458,3 +488,149 @@ def daily_log_day(entry: Entry) -> date:
     if entry.location is not Location.DAY or entry.day is None:
         raise NotOnADailyLogError("this Entry is not on a Daily Log")
     return entry.day
+
+
+# Migration and Scheduling (ADR-0001): a Task moves forward by being copied.
+# The original stays where it is, marked Migrated or Scheduled, and a new Open
+# copy at the destination links back to it.
+
+
+class MigrationError(ValueError):
+    """Raised when an Entry cannot be migrated or scheduled where it was asked to go."""
+
+
+@dataclass(frozen=True)
+class Destination:
+    """Where a Task is migrated or scheduled to."""
+
+    location: Location
+    day: date | None = None
+    month: date | None = None
+
+    @classmethod
+    def daily_log(cls, day: date) -> "Destination":
+        return cls(Location.DAY, day=day)
+
+    @classmethod
+    def monthly_log(cls, month: date) -> "Destination":
+        """A month's task list."""
+        return cls(Location.MONTH, month=month_of(month))
+
+    @classmethod
+    def future_log(cls, month: date, on: date | None = None) -> "Destination":
+        """A later month in the Future Log, optionally on a specific date."""
+        return cls(Location.FUTURE, day=on, month=month_of(month))
+
+
+@dataclass(frozen=True)
+class Migration:
+    """A Task moved forward: the original, now marked, and its Open copy to store."""
+
+    original: Entry
+    copy: NewEntry
+
+
+def day_being_planned(now: datetime, timezone: tzinfo, *, night_before: bool = False) -> date:
+    """The day a Migration plans for: today, or tomorrow when it is done the night before."""
+    planning = today(now, timezone)
+    return planning + timedelta(days=1) if night_before else planning
+
+
+def migrate(task: Entry, *, to: Destination, planning: date) -> Migration:
+    """Migrate or Schedule an Open Task to a destination.
+
+    The destination decides which, given the day being planned (see
+    day_being_planned): that day or its month's task list Migrates the Task
+    (>), and a later day that month or a later month in the Future Log
+    Schedules it (<). The copy keeps the Task's text, Signifiers and time.
+    """
+    if task.type is not EntryType.TASK:
+        raise MigrationError("only Tasks are migrated or scheduled")
+    if task.state is not TaskState.OPEN:
+        raise TaskStateError(f"a {task.state} Task cannot be migrated or scheduled")
+    if (task.location, task.day, task.month) == (to.location, to.day, to.month):
+        raise MigrationError("the Task is already there")
+    state = _marker_for(to, planning=planning)
+    copy = NewEntry(
+        type=task.type,
+        state=TaskState.OPEN,
+        priority=task.priority,
+        inspiration=task.inspiration,
+        time=task.time,
+        text=task.text,
+        day=to.day,
+        location=to.location,
+        month=to.month,
+        migrated_from_id=task.id,
+    )
+    return Migration(original=replace(task, state=state), copy=copy)
+
+
+def _marker_for(to: Destination, *, planning: date) -> TaskState:
+    """Migrated or Scheduled, for a Task moving to a destination."""
+    this_month = month_of(planning)
+    if to.location is Location.DAY and to.day is not None:
+        if to.day < planning:
+            raise MigrationError("a Task cannot move to a day before the one being planned")
+        if month_of(to.day) != this_month:
+            raise MigrationError("a later month's Tasks go in the Future Log")
+        return TaskState.MIGRATED if to.day == planning else TaskState.SCHEDULED
+    if to.location is Location.MONTH and to.month is not None:
+        if to.month != this_month:
+            raise MigrationError("a Task migrates only to the current month's task list")
+        return TaskState.MIGRATED
+    if to.location is Location.FUTURE and to.month is not None:
+        if to.month <= this_month:
+            raise MigrationError("the Future Log holds months after the current one")
+        if to.day is not None and month_of(to.day) != to.month:
+            raise MigrationError("a Future Log date must fall in its month")
+        return TaskState.SCHEDULED
+    raise MigrationError("a destination needs a day or a month")
+
+
+def schedule_destination(day: date, *, planning: date) -> Destination:
+    """Where a Task scheduled to a date goes: that day's Daily Log if it is in the
+    month being planned, or else the Future Log under its month, on that date."""
+    if month_of(day) == month_of(planning):
+        return Destination.daily_log(day)
+    return Destination.future_log(month_of(day), on=day)
+
+
+def move_nested_notes(notes: list[Entry], *, to: Entry) -> list[Entry]:
+    """Re-parent a migrated Task's Nested Notes onto its new copy, wherever it is."""
+    return [
+        replace(note, parent_id=to.id, location=to.location, day=to.day, month=to.month)
+        for note in notes
+    ]
+
+
+def migration_count(entry_id: int, links: Mapping[int, int | None]) -> int:
+    """How many times a Task was migrated or scheduled: its Migration Chain's moves.
+
+    links maps each copy's id to the id it was migrated from. Every copy in a
+    chain shows the same count, so a Task's history reads the same anywhere.
+    """
+    successors = {earlier: later for later, earlier in links.items() if earlier is not None}
+    count, at = 0, entry_id
+    while (earlier := links.get(at)) is not None:
+        count, at = count + 1, earlier
+    at = entry_id
+    while (later := successors.get(at)) is not None:
+        count, at = count + 1, later
+    return count
+
+
+def relink_around(deleted: Entry, successor: Entry) -> Entry:
+    """Close the gap a Deleted copy leaves: its successor now follows the copy before it."""
+    return replace(successor, migrated_from_id=deleted.migrated_from_id)
+
+
+def move_event(event: Entry, nested_notes: list[Entry], *, on: date) -> tuple[Entry, list[Entry]]:
+    """Move an Event on a Daily Log to another day, with its Nested Notes.
+
+    An Event just changes its date: it leaves no marker and no Migration Chain.
+    """
+    if event.type is not EntryType.EVENT:
+        raise MigrationError("only an Event moves by changing its date")
+    daily_log_day(event)
+    return replace(event, day=on), [replace(note, day=on) for note in nested_notes]

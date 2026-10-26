@@ -1,5 +1,7 @@
 """The Persistence module: maps Journal domain values to Postgres tables."""
 
+from collections.abc import Iterable
+from dataclasses import replace
 from datetime import date, datetime
 from datetime import time as TimeOfDay
 
@@ -14,6 +16,7 @@ from sqlalchemy import (
     Time,
     false,
     func,
+    or_,
     select,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
@@ -45,6 +48,10 @@ class EntryRow(Base):
     parent_id: Mapped[int | None] = mapped_column(
         ForeignKey("entries.id", ondelete="SET NULL")
     )
+    # The copy this one was migrated or scheduled from, in its Migration Chain.
+    migrated_from_id: Mapped[int | None] = mapped_column(
+        ForeignKey("entries.id", ondelete="SET NULL"), index=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -62,6 +69,7 @@ class EntryRow(Base):
             location=journal.Location(self.location),
             month=self.month,
             parent_id=self.parent_id,
+            migrated_from_id=self.migrated_from_id,
         )
 
 
@@ -81,6 +89,7 @@ def _columns(entry: journal.NewEntry | journal.Entry) -> dict[str, object]:
         "day": entry.day,
         "location": entry.location,
         "month": entry.month,
+        "migrated_from_id": entry.migrated_from_id,
     }
     if isinstance(entry, journal.Entry):
         # Only a stored Entry can be a Nested Note; saving keeps it nested.
@@ -88,11 +97,43 @@ def _columns(entry: journal.NewEntry | journal.Entry) -> dict[str, object]:
     return columns
 
 
+def _chain_links(session: Session, ids: set[int]) -> dict[int, int | None]:
+    """The Migration Chain links of the chains these Entries are in: id to migrated-from id."""
+    links: dict[int, int | None] = {}
+    seen: set[int] = set()
+    frontier = ids
+    while frontier:
+        seen |= frontier
+        rows = session.execute(
+            select(EntryRow.id, EntryRow.migrated_from_id).where(
+                or_(EntryRow.id.in_(frontier), EntryRow.migrated_from_id.in_(frontier))
+            )
+        ).all()
+        links.update({id: earlier for id, earlier in rows})
+        reached = {id for id, _ in rows} | {earlier for _, earlier in rows if earlier}
+        frontier = reached - seen
+    return links
+
+
+def _loaded(session: Session, rows: Iterable[EntryRow]) -> list[journal.Entry]:
+    """Entries from their rows, each with its Migration Count."""
+    entries = [row.to_entry() for row in rows]
+    linked = {e.id for e in entries if e.type == journal.EntryType.TASK}
+    links = _chain_links(session, linked) if linked else {}
+    return [
+        replace(entry, migration_count=journal.migration_count(entry.id, links))
+        if entry.id in linked
+        else entry
+        for entry in entries
+    ]
+
+
 def add_entry(session: Session, new_entry: journal.NewEntry) -> journal.Entry:
     row = EntryRow(**_columns(new_entry))
     session.add(row)
     session.flush()
-    return row.to_entry()
+    [entry] = _loaded(session, [row])
+    return entry
 
 
 def entries_on(session: Session, day: date) -> list[journal.Entry]:
@@ -101,7 +142,7 @@ def entries_on(session: Session, day: date) -> list[journal.Entry]:
         .where(EntryRow.location == journal.Location.DAY, EntryRow.day == day)
         .order_by(EntryRow.id)
     )
-    return journal.arrange_daily_log([row.to_entry() for row in rows])
+    return journal.arrange_daily_log(_loaded(session, rows))
 
 
 def monthly_log(
@@ -125,7 +166,7 @@ def monthly_log(
         .order_by(EntryRow.id)
     )
     calendar = journal.monthly_calendar(month, [row.to_entry() for row in days])
-    return calendar, [row.to_entry() for row in tasks]
+    return calendar, journal.arrange_task_list(_loaded(session, tasks))
 
 
 def future_log(session: Session, today: date) -> list[journal.FutureMonth]:
@@ -137,7 +178,7 @@ def future_log(session: Session, today: date) -> list[journal.FutureMonth]:
         )
         .order_by(EntryRow.id)
     )
-    return journal.future_log([row.to_entry() for row in rows], today=today)
+    return journal.future_log(_loaded(session, rows), today=today)
 
 
 def _row(session: Session, entry_id: int) -> EntryRow:
@@ -148,7 +189,22 @@ def _row(session: Session, entry_id: int) -> EntryRow:
 
 
 def get_entry(session: Session, entry_id: int) -> journal.Entry:
-    return _row(session, entry_id).to_entry()
+    [entry] = _loaded(session, [_row(session, entry_id)])
+    return entry
+
+
+def nested_notes(session: Session, parent_id: int) -> list[journal.Entry]:
+    """The Nested Notes under a Task or Event, in the order they were logged."""
+    rows = session.scalars(
+        select(EntryRow).where(EntryRow.parent_id == parent_id).order_by(EntryRow.id)
+    )
+    return [row.to_entry() for row in rows]
+
+
+def successor(session: Session, entry_id: int) -> journal.Entry | None:
+    """The copy migrated or scheduled from an Entry, if any."""
+    row = session.scalars(select(EntryRow).where(EntryRow.migrated_from_id == entry_id)).first()
+    return row.to_entry() if row else None
 
 
 def save_entry(session: Session, entry: journal.Entry) -> journal.Entry:
@@ -157,7 +213,8 @@ def save_entry(session: Session, entry: journal.Entry) -> journal.Entry:
     for column, value in _columns(entry).items():
         setattr(row, column, value)
     session.flush()
-    return row.to_entry()
+    [saved] = _loaded(session, [row])
+    return saved
 
 
 def delete_entry(session: Session, entry_id: int) -> None:

@@ -1,4 +1,6 @@
-// Keyboard handling for a Daily Log: select Entries and act on them.
+// Keyboard handling for a Daily Log, a Monthly Log's task list and the Future
+// Log: select Entries and act on them. Selection runs across every list on
+// the page, so it moves from one Future Log month into the next.
 //
 // From the quick-entry box, Escape selects the last Entry and ArrowDown the
 // first. On a selected Entry:
@@ -7,9 +9,14 @@
 //   e  edit (Enter saves, Escape abandons)
 //   Tab  nest a Note under the Task or Event above it    Shift+Tab  un-nest it
 //   Delete / Backspace  delete for good, after confirming
+//   m  Migrate a Task to the day being planned: today, or tomorrow (the night
+//      before) if it is already on today's Daily Log
+//   M  Migrate a Task to this month's task list
+//   s  Schedule a Task: asks for a date (YYYY-MM-DD) or a month (YYYY-MM)
 (() => {
   const quickEntry = () => document.querySelector('input[aria-label="New entry"]');
-  const entries = () => [...document.querySelectorAll("#entries > .entry")];
+  const ENTRY = ".entries > .entry";
+  const entries = () => [...document.querySelectorAll(ENTRY)];
   const byId = (id) => document.getElementById(`entry-${id}`);
 
   function move(from, step) {
@@ -40,6 +47,50 @@
       swap: "innerHTML",
     });
     byId(id)?.focus();
+  }
+
+  // Migrating moves the Task's Nested Notes away, and its copy may land on
+  // this page, so every list on the page is redrawn afterwards.
+  async function migrate(entry, values) {
+    const id = entry.dataset.id;
+    const migrated = await fetch(`/entries/${id}/migrate`, {
+      method: "POST",
+      body: new URLSearchParams(values),
+    });
+    if (!migrated.ok) {
+      entry.focus();
+      return;
+    }
+    const page = await fetch(location.pathname);
+    const fresh = new DOMParser().parseFromString(await page.text(), "text/html");
+    for (const list of document.querySelectorAll(".entries[id]")) {
+      const redrawn = fresh.getElementById(list.id);
+      if (redrawn) list.replaceChildren(...redrawn.children);
+    }
+    byId(id)?.focus();
+  }
+
+  const today = () => document.body.dataset.today;
+  const dayAfter = (day) => {
+    const next = new Date(`${day}T00:00:00Z`);
+    next.setUTCDate(next.getUTCDate() + 1);
+    return next.toISOString().slice(0, 10);
+  };
+
+  function migrateToPlannedDay(entry) {
+    const day = entry.dataset.day;
+    if (day && day >= today()) {
+      migrate(entry, { to: "day", date: dayAfter(today()), night_before: "true" });
+    } else {
+      migrate(entry, { to: "day", date: today() });
+    }
+  }
+
+  function schedule(entry) {
+    const when = prompt("Schedule to a date (YYYY-MM-DD) or a month (YYYY-MM):")?.trim();
+    if (/^\d{4}-\d{2}$/.test(when)) migrate(entry, { to: "future", month: when });
+    else if (/^\d{4}-\d{2}-\d{2}$/.test(when)) migrate(entry, { to: "date", date: when });
+    else entry.focus();
   }
 
   async function remove(entry) {
@@ -97,6 +148,9 @@
     Tab: nest,
     Delete: remove,
     Backspace: remove,
+    m: migrateToPlannedDay,
+    M: (entry) => migrate(entry, { to: "month", month: today().slice(0, 7) }),
+    s: schedule,
   };
 
   document.addEventListener("keydown", (event) => {
@@ -112,7 +166,7 @@
       return;
     }
     const handler = onEntry[event.key];
-    if (handler && target.matches("#entries > .entry")) {
+    if (handler && target.matches(ENTRY)) {
       event.preventDefault();
       handler(target, event);
     }

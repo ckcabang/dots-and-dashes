@@ -1,10 +1,13 @@
-{%- set markers = {"open": "•", "completed": "×", "cancelled": "•", "event": "○", "note": "–"} -%}
+{%- set markers = {"open": "•", "completed": "×", "migrated": ">", "scheduled": "<", "cancelled": "•", "event": "○", "note": "–"} -%}
 <li id="entry-{{ entry.id }}" class="entry entry--{{ entry.type }} entry--{{ entry.state }}{% if entry.parent_id %} entry--nested{% endif %}"
     tabindex="-1" data-id="{{ entry.id }}" data-state="{{ entry.state or '' }}"
+    {%- if entry.location == "day" %} data-day="{{ entry.day.isoformat() }}"{% endif %}
     data-typed="{{ entry | as_typed }}">
   {%- if entry.priority %}<span class="signifier signifier--priority" title="Priority">*</span>{% endif -%}
   {%- if entry.inspiration %}<span class="signifier signifier--inspiration" title="Inspiration">!</span>{% endif -%}
   <span class="state-marker" title="{{ (entry.state or entry.type) | capitalize }}">{{ markers[entry.state or entry.type] }}</span>
   {%- if entry.location == "future" and entry.day %}<time class="future-date" datetime="{{ entry.day.isoformat() }}">{{ entry.day.strftime("%-d %b") }}</time> {% endif -%}
   {%- if entry.time %}<time datetime="{{ entry.time.strftime('%H:%M') }}">{{ entry.time.strftime('%H:%M') }}</time> {% endif -%}
-  <span class="entry-text">{{ entry.text }}</span></li>
+  <span class="entry-text">{{ entry.text }}</span>
+  {%- if entry.migration_count %} <span class="migration-count" title="Migration Count">&gt;&gt;{{ entry.migration_count }}</span>{% endif -%}
+</li>

@@ -1,24 +1,23 @@
 from contextlib import contextmanager
 
 import pytest
-from fastapi.testclient import TestClient
 
 from dots_and_dashes.web import create_app
 
 
 @pytest.fixture
-def client(settings, clock):
-    with TestClient(create_app(settings, clock=clock)) as client:
+def client(settings, clock, logged_in):
+    with logged_in(create_app(settings, clock=clock)) as client:
         yield client
 
 
 @pytest.fixture
-def app_client(settings, clock):
+def app_client(settings, clock, logged_in):
     """A fresh app instance, so what it shows can only have come from Postgres."""
 
     @contextmanager
     def start():
-        with TestClient(create_app(settings, clock=clock)) as client:
+        with logged_in(create_app(settings, clock=clock)) as client:
             yield client
 
     return start

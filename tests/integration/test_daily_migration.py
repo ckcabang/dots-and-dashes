@@ -7,7 +7,6 @@ evening, so Daily Migration plans the 26th. A morning clock plans the 25th.
 from datetime import UTC, datetime
 
 import pytest
-from fastapi.testclient import TestClient
 
 from dots_and_dashes.web import create_app
 
@@ -16,14 +15,14 @@ MORNING = datetime(2026, 10, 25, 14, 0, tzinfo=UTC)
 
 
 @pytest.fixture
-def client(settings, clock):
-    with TestClient(create_app(settings, clock=clock)) as client:
+def client(settings, clock, logged_in):
+    with logged_in(create_app(settings, clock=clock)) as client:
         yield client
 
 
 @pytest.fixture
-def morning(settings):
-    with TestClient(create_app(settings, clock=lambda: MORNING)) as client:
+def morning(settings, logged_in):
+    with logged_in(create_app(settings, clock=lambda: MORNING)) as client:
         yield client
 
 

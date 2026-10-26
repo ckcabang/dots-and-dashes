@@ -14,8 +14,9 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
+from starlette.middleware.sessions import SessionMiddleware
 
-from dots_and_dashes import journal, persistence
+from dots_and_dashes import accounts, journal, persistence
 from dots_and_dashes.settings import Settings
 
 Clock = Callable[[], datetime]
@@ -184,14 +185,36 @@ def _out(entry: journal.Entry) -> EntryOut:
     return EntryOut.model_validate(entry, from_attributes=True)
 
 
-def _session(request: Request) -> Iterator[Session]:
-    with request.app.state.sessionmaker.begin() as session:
-        yield session
+# A login lasts 30 days, on desktop and phone alike.
+SESSION_MAX_AGE = 30 * 24 * 60 * 60
 
 
-def _today(request: Request) -> date:
-    state = request.app.state
-    return journal.today(state.clock(), state.settings.timezone)
+class LoginRequiredError(Exception):
+    """Raised when a journal page or API route is asked for without a session."""
+
+
+def _current_user(request: Request) -> accounts.User:
+    """The logged-in User, from the signed session cookie."""
+    user_id = request.session.get("user_id")
+    if user_id is not None:
+        with request.app.state.sessionmaker() as session:
+            if user := persistence.get_user(session, user_id):
+                return user
+    raise LoginRequiredError
+
+
+UserDep = Annotated[accounts.User, Depends(_current_user)]
+
+
+def _session(request: Request, user: UserDep) -> Iterator[Session]:
+    """A database session that reads and writes only the logged-in User's journal."""
+    with request.app.state.sessionmaker(info={persistence.USER_ID: user.id}) as session:
+        with session.begin():
+            yield session
+
+
+def _today(request: Request, user: UserDep) -> date:
+    return journal.today(request.app.state.clock(), user.timezone)
 
 
 # Scoped to the function so its writes commit before the response is sent;
@@ -252,10 +275,9 @@ def _destination(body: MigrationIn, planning: date) -> journal.Destination:
     raise HTTPException(422, f"migrating to {body.to!r} needs a date or month")
 
 
-def _planning(request: Request, plan: Plan | None) -> journal.Planning:
-    state = request.app.state
+def _planning(request: Request, user: accounts.User, plan: Plan | None) -> journal.Planning:
     return journal.daily_migration_planning(
-        state.clock(), state.settings.timezone, night_before=_night_before(plan)
+        request.app.state.clock(), user.timezone, night_before=_night_before(plan)
     )
 
 
@@ -269,10 +291,10 @@ def _store_migration(session: Session, migration: journal.Migration) -> journal.
 
 
 def _migrate(
-    request: Request, session: Session, entry_id: int, body: MigrationIn
+    request: Request, user: accounts.User, session: Session, entry_id: int, body: MigrationIn
 ) -> tuple[journal.Entry, journal.Entry]:
     """Migrate or Schedule a Task, moving its Nested Notes; the original and its copy."""
-    planning = _planning(request, body.plan).day
+    planning = _planning(request, user, body.plan).day
     task = persistence.get_entry(session, entry_id)
     migration = journal.migrate(task, to=_destination(body, planning), planning=planning)
     copy = _store_migration(session, migration)
@@ -280,11 +302,11 @@ def _migrate(
 
 
 def _daily_migration(
-    request: Request, session: Session, plan: Plan | None
+    request: Request, user: accounts.User, session: Session, plan: Plan | None
 ) -> tuple[journal.Planning, list[journal.MigrationDay]]:
     """The day a Daily Migration run now plans and the Open Tasks it reviews.
     Opening it writes nothing, so it can be skipped."""
-    planning = _planning(request, plan)
+    planning = _planning(request, user, plan)
     return planning, persistence.daily_migration(session, planning.day)
 
 
@@ -400,7 +422,53 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
     app = FastAPI(title="Dots & Dashes", lifespan=lifespan)
     app.state.settings = settings
     app.state.clock = clock
+    app.add_middleware(
+        SessionMiddleware,
+        secret_key=settings.session_secret,
+        session_cookie="session",
+        max_age=SESSION_MAX_AGE,
+        same_site="lax",
+    )
     app.mount("/static", StaticFiles(directory=PACKAGE_DIR / "static"), name="static")
+
+    @app.exception_handler(LoginRequiredError)
+    def login_required(request: Request, exc: LoginRequiredError) -> Response:
+        if request.url.path.startswith("/api/"):
+            return JSONResponse({"detail": "log in first"}, status_code=401)
+        if "HX-Request" in request.headers:
+            # HTMX would swap a followed redirect's login page into the journal.
+            return Response(status_code=401, headers={"HX-Redirect": "/login"})
+        return RedirectResponse("/login", status_code=303)
+
+    # There is no sign-up route: Users are created with `dots-and-dashes create-user`.
+    @app.get("/login", response_class=HTMLResponse)
+    def login_page(request: Request) -> Response:
+        return templates.TemplateResponse(request, "login.html", {})
+
+    @app.post("/login")
+    def log_in(
+        request: Request,
+        email: Annotated[str, Form()],
+        password: Annotated[str, Form()],
+    ) -> Response:
+        with app.state.sessionmaker() as session:
+            found = persistence.user_by_email(session, email)
+        user, password_hash = found if found else (None, None)
+        if user is None or not accounts.password_matches(password_hash, password):
+            return templates.TemplateResponse(
+                request,
+                "login.html",
+                {"email": email, "refused": True},
+                status_code=401,
+            )
+        request.session.clear()
+        request.session["user_id"] = user.id
+        return RedirectResponse("/", status_code=303)
+
+    @app.post("/logout")
+    def log_out(request: Request) -> Response:
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
 
     def refuse(request: Request, exc: Exception) -> Response:
         return JSONResponse({"detail": str(exc)}, status_code=422)
@@ -420,12 +488,12 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
     def entry_not_found(request: Request, exc: persistence.EntryNotFoundError) -> Response:
         return JSONResponse({"detail": str(exc)}, status_code=404)
 
-    def render_daily_log(request: Request, session: Session, day: date) -> Response:
+    def render_daily_log(request: Request, session: Session, day: date, today: date) -> Response:
         return templates.TemplateResponse(
             request,
             "daily_log.html",
             {
-                "today": _today(request),
+                "today": today,
                 "day": day,
                 "previous_day": day - timedelta(days=1),
                 "next_day": day + timedelta(days=1),
@@ -437,15 +505,17 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
     def todays_daily_log_page(
         request: Request, session: SessionDep, today: TodayDep
     ) -> Response:
-        return render_daily_log(request, session, today)
+        return render_daily_log(request, session, today, today)
 
     @app.get("/days")
-    def go_to_date(on: Annotated[date, Query(alias="date")]) -> Response:
+    def go_to_date(on: Annotated[date, Query(alias="date")], user: UserDep) -> Response:
         return RedirectResponse(f"/days/{on.isoformat()}", status_code=303)
 
     @app.get("/days/{day}", response_class=HTMLResponse)
-    def daily_log_page(request: Request, day: date, session: SessionDep) -> Response:
-        return render_daily_log(request, session, day)
+    def daily_log_page(
+        request: Request, day: date, session: SessionDep, today: TodayDep
+    ) -> Response:
+        return render_daily_log(request, session, day, today)
 
     @app.post("/entries")
     def quick_entry(
@@ -483,9 +553,10 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
         request: Request,
         entry_id: int,
         body: Annotated[MigrationIn, Form()],
+        user: UserDep,
         session: SessionDep,
     ) -> Response:
-        original, _ = _migrate(request, session, entry_id, body)
+        original, _ = _migrate(request, user, session, entry_id, body)
         return _entry_fragment(request, original)
 
     @app.post("/entries/{entry_id}/nest", response_class=HTMLResponse)
@@ -561,9 +632,9 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
 
     @app.post("/api/entries/{entry_id}/migrate")
     def migrate_entry(
-        request: Request, entry_id: int, body: MigrationIn, session: SessionDep
+        request: Request, entry_id: int, body: MigrationIn, user: UserDep, session: SessionDep
     ) -> MigrationOut:
-        original, copy = _migrate(request, session, entry_id, body)
+        original, copy = _migrate(request, user, session, entry_id, body)
         return MigrationOut(original=_out(original), copy_=_out(copy))
 
     @app.post("/api/entries/{entry_id}/date")
@@ -660,9 +731,13 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
 
     @app.get("/migration", response_class=HTMLResponse)
     def daily_migration_page(
-        request: Request, session: SessionDep, today: TodayDep, plan: Plan | None = None
+        request: Request,
+        user: UserDep,
+        session: SessionDep,
+        today: TodayDep,
+        plan: Plan | None = None,
     ) -> Response:
-        planning, review = _daily_migration(request, session, plan)
+        planning, review = _daily_migration(request, user, session, plan)
         return templates.TemplateResponse(
             request,
             "daily_migration.html",
@@ -676,9 +751,9 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
 
     @app.get("/api/daily-migration")
     def daily_migration(
-        request: Request, session: SessionDep, plan: Plan | None = None
+        request: Request, user: UserDep, session: SessionDep, plan: Plan | None = None
     ) -> DailyMigrationOut:
-        planning, review = _daily_migration(request, session, plan)
+        planning, review = _daily_migration(request, user, session, plan)
         return DailyMigrationOut(
             planning=planning.day,
             night_before=planning.night_before,

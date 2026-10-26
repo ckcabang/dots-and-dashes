@@ -8,7 +8,16 @@ A personal, keyboard-first bullet journal. See [`CONTEXT.md`](CONTEXT.md) for th
 docker compose up --build
 ```
 
-This starts Postgres and the app, applies the Alembic migrations, and serves today's Daily Log at <http://localhost:8000>. "Today" uses the `JOURNAL_TIMEZONE` environment variable (an IANA name, default `UTC`), for example `JOURNAL_TIMEZONE=America/Los_Angeles docker compose up`.
+This starts Postgres and the app, applies the Alembic migrations, and serves the journal at <http://localhost:8000>, behind a login.
+
+There is no sign-up page. Create the User, and the Canary User for monitoring, from the command line, with the password from a secret (the `USER_PASSWORD` environment variable, or the one `--password-env` names) or typed at a prompt:
+
+```sh
+docker compose exec app dots-and-dashes create-user --email me@example.com --timezone America/Los_Angeles
+docker compose exec -e CANARY_PASSWORD app dots-and-dashes create-user --email canary@example.com --timezone UTC --canary --password-env CANARY_PASSWORD
+```
+
+Each User's timezone (an IANA name) decides their "today". A login lasts 30 days, in a session cookie signed with `SESSION_SECRET`. Set it wherever the app is deployed; without it each app process makes its own, so a restart logs everyone out. Entries logged before Users existed belong to the first User created who isn't the Canary User.
 
 Feature flags are environment variables too, off unless set to `1`, `true`, `yes` or `on`: `FLAG_MONTHLY_REVIEW` turns on the Monthly Review (`/monthly-review`). With a flag off its pages are hidden and its routes answer 404.
 

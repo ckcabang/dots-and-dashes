@@ -1,8 +1,12 @@
 from contextlib import contextmanager
+from datetime import date
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
 
+from dots_and_dashes import persistence
 from dots_and_dashes.web import create_app
 
 
@@ -239,3 +243,27 @@ def test_nesting_from_the_page_returns_the_daily_log_with_the_note_indented(app_
     for html in (fragment.text, page.text):
         assert html.index("dentist") < html.index("bring card")
         assert html.count('entry--nested"') == 1
+
+
+def test_quick_entry_is_saved_before_its_response_is_sent(settings, clock):
+    """A browser can send its next request the moment a response arrives, so
+    the Entry must be committed by the time the response starts."""
+    app = create_app(settings, clock=clock)
+    engine = create_engine(settings.database_url)
+    saved_as_response_started = []
+
+    async def app_checking_the_journal_as_responses_start(scope, receive, send):
+        async def check_then_send(message):
+            if message["type"] == "http.response.start":
+                with Session(engine) as session:
+                    entries = persistence.entries_on(session, date(2026, 10, 25))
+                saved_as_response_started.extend(entry.text for entry in entries)
+            await send(message)
+
+        await app(scope, receive, check_then_send)
+
+    with TestClient(app_checking_the_journal_as_responses_start) as client:
+        client.post("/entries", data={"text": "buy milk"}, headers={"HX-Request": "true"})
+    engine.dispose()
+
+    assert saved_as_response_started == ["buy milk"]

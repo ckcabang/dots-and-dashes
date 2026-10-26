@@ -59,7 +59,9 @@ def _today(request: Request) -> date:
     return journal.today(state.clock(), state.settings.timezone)
 
 
-SessionDep = Annotated[Session, Depends(_session)]
+# Scoped to the function so its writes commit before the response is sent;
+# the default scope would commit after, racing the browser's next request.
+SessionDep = Annotated[Session, Depends(_session, scope="function")]
 TodayDep = Annotated[date, Depends(_today)]
 
 

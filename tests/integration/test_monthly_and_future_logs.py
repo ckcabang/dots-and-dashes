@@ -188,3 +188,20 @@ def test_a_note_off_the_daily_log_cannot_be_nested(client):
 
     assert client.post(f"/api/entries/{note['id']}/nest").status_code == 422
     assert client.post(f"/entries/{note['id']}/nest").status_code == 422
+
+
+def test_an_entry_off_the_daily_log_cannot_be_reordered(client):
+    client.post("/api/monthly-logs/2026-10/entries", json={"text": "renew passport"})
+    task = client.post("/api/monthly-logs/2026-10/entries", json={"text": "file taxes"}).json()
+
+    assert client.post(f"/api/entries/{task['id']}/move", json={"to": 0}).status_code == 422
+    assert client.post(f"/entries/{task['id']}/move", data={"to": 0}).status_code == 422
+
+
+def test_monthly_log_tasks_are_not_draggable(client):
+    client.post("/api/monthly-logs/2026-10/entries", json={"text": "renew passport"})
+
+    page = client.get("/months/2026-10").text
+
+    assert "renew passport" in page
+    assert 'draggable="true"' not in page

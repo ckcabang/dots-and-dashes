@@ -172,7 +172,7 @@ def test_a_completed_task_cannot_be_migrated(client):
 def test_an_event_moves_by_changing_its_date(client):
     dinner = _log(client, "o 7pm dinner")
 
-    moved = client.post(f"/api/entries/{dinner}/move", json={"date": "2026-10-30"})
+    moved = client.post(f"/api/entries/{dinner}/date", json={"date": "2026-10-30"})
 
     assert moved.status_code == 200
     assert client.get("/api/daily-logs/2026-10-24").json()["entries"] == []

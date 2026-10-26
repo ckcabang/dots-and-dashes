@@ -13,6 +13,9 @@
 //      before) if it is already on today's Daily Log
 //   M  Migrate a Task to this month's task list
 //   s  Schedule a Task: asks for a date (YYYY-MM-DD) or a month (YYYY-MM)
+//   Alt+ArrowUp / Alt+ArrowDown  reorder an untimed Entry (it re-Anchors)
+// Untimed Entries can also be dragged. Timed Entries move only by changing
+// their time, so they aren't draggable and the server refuses to move them.
 (() => {
   const quickEntry = () => document.querySelector('input[aria-label="New entry"]');
   const ENTRY = ".entries > .entry";
@@ -136,6 +139,64 @@
     });
   }
 
+  const isNested = (entry) => entry.classList.contains("entry--nested");
+
+  // An Entry and the Nested Notes under it, which move together.
+  function block(list, entry) {
+    const start = list.indexOf(entry);
+    let end = start + 1;
+    while (end < list.length && isNested(list[end])) end += 1;
+    return list.slice(start, end);
+  }
+
+  // Move an untimed Entry to index `to` of the Daily Log without it and its
+  // Nested Notes; the server redraws the Daily Log in its new order.
+  async function reorder(entry, to) {
+    const id = entry.dataset.id;
+    await htmx.ajax("POST", `/entries/${id}/move`, {
+      target: "#entries",
+      swap: "innerHTML",
+      values: { to: Math.max(0, to) },
+    });
+    byId(id)?.focus();
+  }
+
+  function reorderByKey(entry, key) {
+    const list = entries();
+    let to = list.indexOf(entry);
+    if (key === "ArrowDown") {
+      // Past the next Entry; the server keeps it clear of that one's Notes.
+      to += 1;
+    } else {
+      do to -= 1; while (to > 0 && isNested(list[to]));
+    }
+    reorder(entry, to);
+  }
+
+  let dragged = null;
+  document.addEventListener("dragstart", (event) => {
+    dragged = event.target.closest?.("#entries > .entry") || null;
+    if (dragged) event.dataTransfer.effectAllowed = "move";
+  });
+  document.addEventListener("dragover", (event) => {
+    if (dragged) event.preventDefault();
+  });
+  document.addEventListener("drop", (event) => {
+    const target = event.target.closest?.("#entries > .entry");
+    if (!dragged || !target) return;
+    event.preventDefault();
+    const list = entries();
+    const moving = block(list, dragged);
+    const others = list.filter((entry) => !moving.includes(entry));
+    if (!others.includes(target)) return;
+    const box = target.getBoundingClientRect();
+    const below = event.clientY > box.top + box.height / 2;
+    reorder(dragged, others.indexOf(target) + (below ? 1 : 0));
+  });
+  document.addEventListener("dragend", () => {
+    dragged = null;
+  });
+
   const onEntry = {
     j: (entry) => move(entry, 1),
     ArrowDown: (entry) => move(entry, 1),
@@ -154,8 +215,17 @@
   };
 
   document.addEventListener("keydown", (event) => {
-    if (event.ctrlKey || event.metaKey || event.altKey) return;
     const target = event.target;
+    if (
+      event.altKey &&
+      (event.key === "ArrowUp" || event.key === "ArrowDown") &&
+      target.matches("#entries > .entry[draggable=true]")
+    ) {
+      event.preventDefault();
+      reorderByKey(target, event.key);
+      return;
+    }
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
     if (target === quickEntry()) {
       const list = entries();
       const pick = { Escape: list.at(-1), ArrowDown: list[0] }[event.key];

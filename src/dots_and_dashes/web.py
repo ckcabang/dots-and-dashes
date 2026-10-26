@@ -33,6 +33,14 @@ class NewEntryIn(BaseModel):
     day: date | None = None  # the Daily Log to log it on; today when omitted
 
 
+class MoveIn(BaseModel):
+    to: int
+
+
+class TimeIn(BaseModel):
+    time: time
+
+
 class EditedEntryIn(BaseModel):
     text: str
 
@@ -74,6 +82,8 @@ class MigrationOut(BaseModel):
 
 
 class MovedEventIn(BaseModel):
+    """An Event's new date: Events move only by changing it."""
+
     on: date = Field(alias="date")
 
 
@@ -227,6 +237,18 @@ def _un_nest(session: Session, entry_id: int) -> journal.Entry:
     return persistence.save_entry(session, journal.un_nest_note(entry))
 
 
+def _rearrange(
+    session: Session,
+    entry_id: int,
+    change: Callable[[list[journal.Entry]], list[journal.Entry]],
+) -> date:
+    """Apply an ordering change to the Daily Log holding an Entry, store it,
+    and return that Daily Log's day."""
+    day = journal.daily_log_day(persistence.get_entry(session, entry_id))
+    persistence.save_daily_log(session, change(persistence.entries_on(session, day)))
+    return day
+
+
 def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -> FastAPI:
     settings = settings or Settings.from_env()
 
@@ -256,6 +278,12 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
 
     @app.exception_handler(journal.MigrationError)
     def refuse_migration(request: Request, exc: journal.MigrationError) -> Response:
+        return JSONResponse({"detail": str(exc)}, status_code=422)
+
+    @app.exception_handler(journal.TimedEntryMoveError)
+    @app.exception_handler(journal.NestedNoteMoveError)
+    @app.exception_handler(journal.UntimedEntryError)
+    def refuse_reordering(request: Request, exc: ValueError) -> Response:
         return JSONResponse({"detail": str(exc)}, status_code=422)
 
     @app.exception_handler(journal.NestingError)
@@ -306,12 +334,25 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
         day: Annotated[date | None, Form()] = None,
     ) -> Response:
         on = day or today
-        entry = persistence.add_entry(session, journal.log_entry(text, on=on))
+        persistence.add_entry(session, journal.log_entry(text, on=on))
         if "HX-Request" in request.headers:
-            return templates.TemplateResponse(
-                request, "_entry.html", {"entry": entry}, status_code=201
-            )
+            # The whole Daily Log, since a Timed Entry may land anywhere in it.
+            return _entries_fragment(request, session, on, status_code=201)
         return RedirectResponse(f"/days/{on.isoformat()}", status_code=303)
+
+    @app.post("/entries/{entry_id}/move")
+    def move_entry_on_page(
+        request: Request,
+        entry_id: int,
+        to: Annotated[int, Form()],
+        session: SessionDep,
+    ) -> Response:
+        day = _rearrange(
+            session, entry_id, lambda entries: journal.move_entry(entries, entry_id, to=to)
+        )
+        if "HX-Request" in request.headers:
+            return _entries_fragment(request, session, day)
+        return RedirectResponse(f"/days/{day.isoformat()}", status_code=303)
 
     # The nesting, migration and moving routes come before the Task State
     # ones, whose {change} would otherwise also match their names.
@@ -335,9 +376,14 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
         entry = _un_nest(session, entry_id)
         return _entries_fragment(request, session, journal.daily_log_day(entry))
 
-    def _entries_fragment(request: Request, session: Session, day: date) -> Response:
+    def _entries_fragment(
+        request: Request, session: Session, day: date, status_code: int = 200
+    ) -> Response:
         return templates.TemplateResponse(
-            request, "_entries.html", {"entries": persistence.entries_on(session, day)}
+            request,
+            "_entries.html",
+            {"entries": persistence.entries_on(session, day)},
+            status_code=status_code,
         )
 
     @app.post("/entries/{entry_id}/{change}")
@@ -368,6 +414,24 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
         )
         return EntryOut.model_validate(entry, from_attributes=True)
 
+    @app.post("/api/entries/{entry_id}/move")
+    def move_entry(entry_id: int, body: MoveIn, session: SessionDep) -> DailyLogOut:
+        day = _rearrange(
+            session,
+            entry_id,
+            lambda entries: journal.move_entry(entries, entry_id, to=body.to),
+        )
+        return daily_log_out(session, day)
+
+    @app.post("/api/entries/{entry_id}/time")
+    def change_time(entry_id: int, body: TimeIn, session: SessionDep) -> DailyLogOut:
+        day = _rearrange(
+            session,
+            entry_id,
+            lambda entries: journal.change_time(entries, entry_id, to=body.time),
+        )
+        return daily_log_out(session, day)
+
     @app.post("/api/entries/{entry_id}/nest")
     def nest_entry(entry_id: int, session: SessionDep) -> EntryOut:
         return EntryOut.model_validate(_nest(session, entry_id), from_attributes=True)
@@ -383,7 +447,7 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
         original, copy = _migrate(request, session, entry_id, body)
         return MigrationOut(original=_out(original), copy_=_out(copy))
 
-    @app.post("/api/entries/{entry_id}/move")
+    @app.post("/api/entries/{entry_id}/date")
     def move_event(entry_id: int, body: MovedEventIn, session: SessionDep) -> EntryOut:
         return _out(_move_event(session, entry_id, body.on))
 

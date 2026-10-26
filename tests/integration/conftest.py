@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import httpx2
 import pytest
 from alembic import command
 from alembic.config import Config
@@ -35,6 +36,10 @@ TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL", "")
 def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line(
         "markers", "failed_requests: the test expects the app to fail a request with a 500"
+    )
+    config.addinivalue_line(
+        "markers",
+        "unauthorized_requests: the test expects the logged-in client to be answered a 401",
     )
 
 
@@ -61,6 +66,19 @@ def no_failed_requests(request: pytest.FixtureRequest):
     logger.removeHandler(failed)
     if failed.lines and not request.node.get_closest_marker("failed_requests"):
         pytest.fail("The app failed a request:\n" + "\n".join(failed.lines))
+
+
+@pytest.fixture(autouse=True)
+def no_unauthorized_requests(request: pytest.FixtureRequest):
+    """Fail a test during which the logged-in client was answered a 401.
+
+    A lost login otherwise surfaces as a `KeyError` on `{"detail": "log in
+    first"}`, far from its cause. `logged_in` records each 401 here.
+    """
+    unauthorized: list[str] = []
+    yield unauthorized
+    if unauthorized and not request.node.get_closest_marker("unauthorized_requests"):
+        pytest.fail("The logged-in client was answered a 401:\n" + "\n".join(unauthorized))
 
 # 03:00 UTC on 26 Oct is still 25 Oct in the User's Los Angeles, so tests
 # that see 2026-10-25 as "today" prove the User's timezone is applied.
@@ -149,14 +167,26 @@ def user(create_user) -> str:
 
 
 @pytest.fixture
-def logged_in(user):
-    """Start a client on an app, logged in as the User or another User's email."""
+def logged_in(user, no_unauthorized_requests: list[str]):
+    """Start a client on an app, logged in as the User or another User's email.
+
+    Every request it makes after logging in that is answered a 401 fails the
+    test, through `no_unauthorized_requests`.
+    """
+
+    def record_unauthorized(response: httpx2.Response) -> None:
+        if response.status_code == 401:
+            request = response.request
+            no_unauthorized_requests.append(
+                f"{request.method} {request.url.path} answered {response.status_code}"
+            )
 
     @contextmanager
     def start(app: FastAPI, email: str = user, **client_args):
         with TestClient(app, **client_args) as client:
             response = client.post("/login", data={"email": email, "password": PASSWORD})
             assert response.status_code in (200, 303), response.text
+            client.event_hooks["response"].append(record_unauthorized)
             yield client
 
     return start

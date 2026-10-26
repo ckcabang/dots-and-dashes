@@ -116,6 +116,7 @@ def test_a_wrong_email_or_password_is_refused_and_logs_nothing_in(
     assert todays_daily_log.status_code == 401
 
 
+@pytest.mark.unauthorized_requests
 def test_a_forged_session_cookie_is_refused(settings, clock, user, logged_in):
     with logged_in(create_app(settings, clock=clock)) as client:
         signed = client.cookies["session"]
@@ -150,6 +151,7 @@ def test_a_session_survives_the_host_clock_stepping_backwards(
     assert after_the_step.status_code == 200, after_the_step.text
 
 
+@pytest.mark.unauthorized_requests
 def test_logging_out_ends_the_session(settings, clock, logged_in):
     with logged_in(create_app(settings, clock=clock)) as client:
         page = client.get("/")

@@ -1,26 +1,57 @@
 {
-    "permissions": {
-      "allow": [
-        "Bash(make test)",
-        "Bash(make test *)",
-        "Bash(make check)",
-        "Bash(make check *)",
-        "Bash(make test-logs)",
-        "Bash(make test-down)",
-        "Bash(docker compose *)",
-        "Bash(docker ps *)"
-      ]
-    },
-    "sandbox": {
-      "excludedCommands": [
-        "docker ps *",
-        "docker compose *",
-        "make test",
-        "make test *",
-        "make check",
-        "make check *",
-        "make test-logs",
-        "make test-down"
-      ]
+      "permissions": {
+        "allow": [
+          "Bash(make test)",
+          "Bash(make check)",
+          "Bash(make test-logs)",
+          "Bash(make test-down)",
+          "Bash(docker compose up)",
+          "Bash(docker compose up *)",
+          "Bash(docker compose down)",
+          "Bash(docker compose down *)",
+          "Bash(docker compose ps)",
+          "Bash(docker compose ps *)",
+          "Bash(docker compose logs)",
+          "Bash(docker compose logs *)",
+          "Bash(docker compose build)",
+          "Bash(docker compose build *)",
+          "Bash(docker compose stop)",
+          "Bash(docker compose stop *)",
+          "Bash(docker compose restart)",
+          "Bash(docker compose restart *)",
+          "Bash(docker ps)",
+          "Bash(docker ps *)"
+        ],
+        "ask": [
+          "Edit(**/Makefile)",
+          "Edit(**/Dockerfile)",
+          "Edit(**/docker-compose*.yml)",
+          "Edit(**/compose*.yml)",
+          "Edit(**/.env)"
+        ]
+      },
+      "sandbox": {
+        "excludedCommands": [
+          "docker ps",
+          "docker ps *",
+          "docker compose up",
+          "docker compose up *",
+          "docker compose down",
+          "docker compose down *",
+          "docker compose ps",
+          "docker compose ps *",
+          "docker compose logs",
+          "docker compose logs *",
+          "docker compose build",
+          "docker compose build *",
+          "docker compose stop",
+          "docker compose stop *",
+          "docker compose restart",
+          "docker compose restart *",
+          "make test",
+          "make check",
+          "make test-logs",
+          "make test-down"
+        ]
+      }
     }
-  }

@@ -17,7 +17,7 @@ A personal, keyboard-first bullet journal web app: rapid logging into Daily, Mon
 
 ## Running commands
 
-Run `make check`, `make test …`, `make test-down` and `docker compose …` as standalone commands: no `cd`, no `&&`/`;` chaining, no env-var prefix, no pipes or redirects. Pass options as make variables (`make test T=tests/unit`). Only a standalone command matches the sandbox exclusions in `.claude/settings.json`, so it can reach Docker without a permission prompt.
+Run `make check`, `make test`, `make test-logs`, `make test-down` and the `docker compose` lifecycle commands (`up`, `down`, `ps`, `logs`, `build`, `stop`, `restart`) as standalone commands: no `cd`, no `&&`/`;` chaining, no env-var prefix, no pipes or redirects. Only these exact forms match the sandbox exclusions in `.claude/settings.json`, so only they can reach Docker without a permission prompt. `make test T=…` and `docker compose exec`/`run` are not excluded: they run sandboxed, cannot reach Docker, and asking to retry them unsandboxed prompts the human. To run part of the suite, run `make check` or `make test` instead.
 
 ## Agent skills
 

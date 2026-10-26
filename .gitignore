@@ -16,4 +16,5 @@ wheels/
 
 # Claude Code: per-machine settings and internal state
 .claude/settings.local.json
+.claude/settings.local.annotated.jsonc
 .claude/.cc-writes/

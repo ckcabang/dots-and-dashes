@@ -52,7 +52,7 @@ New migrations: `DATABASE_URL=… uv run alembic revision --autogenerate -m "…
 
 ## Deploy
 
-Dev, <https://dots-and-dashes-dev.fly.dev>, always runs `main`: every merge runs [`.github/workflows/deploy-dev.yml`](.github/workflows/deploy-dev.yml), which builds an image tagged with the commit (`registry.fly.io/dots-and-dashes-dev:<sha>`) and deploys it. The release command applies the Alembic migrations before any Machine moves to the new image. Run the workflow from the Actions tab to redeploy `main` by hand, for instance after changing a Fly secret.
+Dev, <https://dots-and-dashes-dev.fly.dev>, always runs `main`: every merge runs [`.github/workflows/deploy-dev.yml`](.github/workflows/deploy-dev.yml), which builds an image tagged with the commit (`registry.fly.io/dots-and-dashes-dev:<sha>`) and deploys it. The release command, `dots-and-dashes migrate`, applies the Alembic migrations before any Machine moves to the new image. Run the workflow from the Actions tab to redeploy `main` by hand, for instance after changing a Fly secret.
 
 Dev is two Fly apps in `iad`: `dots-and-dashes-dev` ([`fly.dev.toml`](fly.dev.toml)) and its own Postgres, `dots-and-dashes-dev-db` ([`fly.dev-db.toml`](fly.dev-db.toml), [ADR-0003](docs/adr/0003-self-run-postgres-on-fly.md)), which has no public IP and is reached at `dots-and-dashes-dev-db.flycast`. Both stop when idle and start on the next request. `DATABASE_URL`, `SESSION_SECRET` and `FLAG_MONTHLY_REVIEW` are Fly secrets (`flyctl secrets list -a dots-and-dashes-dev`), and the workflow deploys with the `FLY_API_TOKEN` GitHub secret, a deploy token for the dev app only.
 
@@ -60,4 +60,12 @@ To set dev up from nothing (apps, volume, secrets, token, first deploy and your 
 
 ```sh
 scripts/provision-dev
+```
+
+Prod, <https://dots-and-dashes.fly.dev>, changes only by hand: run [`.github/workflows/deploy-prod.yml`](.github/workflows/deploy-prod.yml) (Actions → Deploy to prod) with the commit SHA of a `main` build. It copies the image dev built and ran for that commit into prod's registry (`registry.fly.io/dots-and-dashes:<sha>`) and deploys it; rolling back is the same run with an earlier SHA. [`docs/runbooks/deploy.md`](docs/runbooks/deploy.md) walks through both.
+
+Prod is `dots-and-dashes` ([`fly.prod.toml`](fly.prod.toml)) and its own Postgres, `dots-and-dashes-db` ([`fly.prod-db.toml`](fly.prod-db.toml)), both always on. It deploys with the `FLY_PROD_API_TOKEN` GitHub secret, a deploy token for the prod app only, and reads dev's image with dev's `FLY_API_TOKEN`. To set prod up once `deploy-prod.yml` is on `main` and dev has deployed, run its wizard:
+
+```sh
+scripts/provision-prod
 ```

@@ -209,6 +209,47 @@ def test_a_refused_triage_from_the_page_says_why_and_keeps_the_adjustment(client
     assert client.get("/api/inbox").json()["count"] == 1
 
 
+@pytest.mark.parametrize(
+    ("to", "on", "month", "reason"),
+    [
+        pytest.param("day", "2026-02-30", "", "'2026-02-30' is not a date", id="date"),
+        pytest.param("future", "", "2026-13", "'2026-13' is not a month", id="month"),
+    ],
+)
+def test_triage_from_the_page_refuses_an_impossible_date_or_month(client, to, on, month, reason):
+    capture_id = _capture(client, "conference")
+
+    refused = client.post(
+        f"/inbox/{capture_id}/triage",
+        data={"text": "o big conference", "to": to, "date": on, "month": month},
+    )
+
+    assert refused.status_code == 422
+    assert refused.headers["content-type"].startswith("text/html")
+    assert f'<p role="alert">{reason.replace("\'", "&#39;")}</p>' in refused.text
+    assert 'value="o big conference"' in refused.text
+    assert f'value="{on}"' in refused.text
+    assert f'value="{month}"' in refused.text
+    assert client.get("/api/inbox").json()["count"] == 1
+
+
+@pytest.mark.parametrize(
+    "placing",
+    [
+        pytest.param({"to": "day", "date": "2026-02-30"}, id="date"),
+        pytest.param({"to": "future", "month": "2026-13"}, id="month"),
+    ],
+)
+def test_the_api_refuses_an_impossible_triage_date_or_month(client, placing):
+    capture_id = _capture(client, "conference")
+
+    refused = client.post(f"/api/captures/{capture_id}/triage", json=placing)
+
+    assert refused.status_code == 422
+    assert "detail" in refused.json()
+    assert client.get("/api/inbox").json()["count"] == 1
+
+
 def test_a_capture_is_deleted_from_the_page(client):
     capture_id = _capture(client, "asdfgh")
 

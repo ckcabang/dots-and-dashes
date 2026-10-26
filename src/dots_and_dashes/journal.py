@@ -5,6 +5,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta, tzinfo
 from enum import StrEnum
+from typing import Literal
 
 
 class EntryType(StrEnum):
@@ -744,6 +745,41 @@ def schedule_destination(day: date, *, planning: date) -> Destination:
     return Destination.future_log(month_of(day), on=day)
 
 
+# Where the User asks an Entry to go: a Daily Log ("day"), a month's task list
+# ("month"), the Future Log ("future"), or a date to schedule it to ("date").
+DestinationChoice = Literal["day", "month", "future", "date"]
+
+
+class IncompleteDestinationError(PlacementError):
+    """Raised when a destination is missing the date or month it needs."""
+
+
+def destination(
+    to: DestinationChoice, *, on: date | None, month: date | None, planning: date
+) -> Destination:
+    """The Destination the User asked for, for Migration and Triage alike.
+
+    A Daily Log is on's, or else the day being planned's; a task list is
+    month's, or else the day being planned's month. The Future Log needs a
+    month, optionally with a date on it, and scheduling needs a date (see
+    schedule_destination). For Triage the day being planned is today. The
+    destination's own rules are checked where the Entry is placed.
+    """
+    match to:
+        case "day":
+            return Destination.daily_log(on or planning)
+        case "month":
+            return Destination.monthly_log(month or planning)
+        case "future":
+            if month is None:
+                raise IncompleteDestinationError("the Future Log needs a month")
+            return Destination.future_log(month, on=on)
+        case "date":
+            if on is None:
+                raise IncompleteDestinationError("scheduling needs a date")
+            return schedule_destination(on, planning=planning)
+
+
 def move_nested_notes(notes: list[Entry], *, to: Entry) -> list[Entry]:
     """Re-parent a migrated Task's Nested Notes onto its new copy, wherever it is."""
     return [
@@ -1070,7 +1106,9 @@ def triage(
     text = capture.text if text is None else text
     if to.location is Location.DAY and to.day is not None:
         return log_entry(text, on=to.day)
-    if to.location is Location.MONTH and to.month == month_of(today):
+    if to.location is Location.MONTH and to.month is not None:
+        if to.month != month_of(today):
+            raise PlacementError("a Capture goes only on the current month's task list")
         return log_month_entry(text, month=to.month, today=today)
     if to.location is Location.FUTURE and to.month is not None:
         return log_future_entry(text, month=to.month, today=today, on=to.day)

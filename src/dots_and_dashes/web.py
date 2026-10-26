@@ -205,9 +205,23 @@ class TriageIn(BaseModel):
     month: str | None = Field(None, pattern=r"^\d{4}-\d{2}$")
 
 
+class TriageForm(BaseModel):
+    """TriageIn as the Triage page sends it: the date and month as typed,
+    read once the form is in, so an impossible one is refused on the page."""
+
+    to: Literal["day", "month", "future"]
+    text: str | None = None
+    on: str | None = Field(None, alias="date")
+    month: str | None = None
+
+
 class InboxOut(BaseModel):
     count: int
     captures: list[CaptureOut]
+
+
+class UnreadableDateError(ValueError):
+    """Raised for a date or month, as typed, that is no real day or month."""
 
 
 def _parse_month(value: str) -> date:
@@ -215,7 +229,21 @@ def _parse_month(value: str) -> date:
     try:
         return date.fromisoformat(f"{value}-01")
     except ValueError:
-        raise HTTPException(422, f"{value!r} is not a month") from None
+        raise UnreadableDateError(f"{value!r} is not a month") from None
+
+
+def _optional_month(value: str | None) -> date | None:
+    return _parse_month(value) if value else None
+
+
+def _optional_date(value: str | None) -> date | None:
+    """Read a date written YYYY-MM-DD, if one was."""
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        raise UnreadableDateError(f"{value!r} is not a date") from None
 
 
 def _month_param(month: Annotated[str, PathParam(pattern=r"^\d{4}-\d{2}$")]) -> date:
@@ -322,20 +350,6 @@ def _edit(session: Session, entry_id: int, text: str) -> journal.Entry:
     return persistence.save_entry(session, edited)
 
 
-def _destination(body: MigrationIn, planning: date) -> journal.Destination:
-    month = _parse_month(body.month) if body.month else None
-    match body.to:
-        case "day":
-            return journal.Destination.daily_log(body.on or planning)
-        case "month":
-            return journal.Destination.monthly_log(month or planning)
-        case "future" if month:
-            return journal.Destination.future_log(month, on=body.on)
-        case "date" if body.on:
-            return journal.schedule_destination(body.on, planning=planning)
-    raise HTTPException(422, f"migrating to {body.to!r} needs a date or month")
-
-
 def _planning(request: Request, user: accounts.User, plan: Plan | None) -> journal.Planning:
     return journal.daily_migration_planning(
         request.app.state.clock(), user.timezone, night_before=_night_before(plan)
@@ -357,7 +371,10 @@ def _migrate(
     """Migrate or Schedule a Task, moving its Nested Notes; the original and its copy."""
     planning = _planning(request, user, body.plan).day
     task = persistence.get_entry(session, entry_id)
-    migration = journal.migrate(task, to=_destination(body, planning), planning=planning)
+    to = journal.destination(
+        body.to, on=body.on, month=_optional_month(body.month), planning=planning
+    )
+    migration = journal.migrate(task, to=to, planning=planning)
     copy = _store_migration(session, migration)
     return persistence.get_entry(session, task.id), copy
 
@@ -431,26 +448,20 @@ def _delete(session: Session, entry_id: int) -> None:
     persistence.delete_entry(session, entry_id)
 
 
-class NeedsAMonthError(ValueError):
-    """Raised when a Capture is placed in the Future Log without a month."""
-
-
-def _triage_destination(body: TriageIn, today: date) -> journal.Destination:
-    match body.to:
-        case "day":
-            return journal.Destination.daily_log(body.on or today)
-        case "month":
-            return journal.Destination.monthly_log(today)
-        case "future" if body.month:
-            return journal.Destination.future_log(_parse_month(body.month), on=body.on)
-    raise NeedsAMonthError("the Future Log needs a month")
-
-
-def _triage(session: Session, capture_id: int, body: TriageIn, today: date) -> journal.Entry:
+def _triage(
+    session: Session,
+    capture_id: int,
+    *,
+    to: Literal["day", "month", "future"],
+    on: date | None,
+    month: date | None,
+    text: str | None,
+    today: date,
+) -> journal.Entry:
     """Turn a Capture into an Entry where it was placed, taking it out of the Inbox."""
     capture = persistence.get_capture(session, capture_id)
-    to = _triage_destination(body, today)
-    entry = _add(session, journal.triage(capture, text=body.text, to=to, today=today))
+    destination = journal.destination(to, on=on, month=month, planning=today)
+    entry = _add(session, journal.triage(capture, text=text, to=destination, today=today))
     persistence.delete_capture(session, capture_id)
     return entry
 
@@ -482,8 +493,10 @@ def _rearrange(
     return day
 
 
-# Journal rules that refuse a request, answered 422 with the reason.
+# Journal rules that refuse a request, and dates that are no real day or
+# month, answered 422 with the reason.
 REFUSED_AS_INVALID: tuple[type[ValueError], ...] = (
+    UnreadableDateError,
     journal.BlankEntryError,
     journal.BlankCaptureError,
     journal.PlacementError,
@@ -492,7 +505,6 @@ REFUSED_AS_INVALID: tuple[type[ValueError], ...] = (
     journal.NestedNoteMoveError,
     journal.UntimedEntryError,
     journal.NestingError,
-    NeedsAMonthError,
 )
 
 
@@ -998,7 +1010,7 @@ def create_app(
         today: date,
         capture_id: int | None = None,
         *,
-        adjusted: TriageIn | None = None,
+        adjusted: TriageForm | None = None,
         refused: str | None = None,
     ) -> Response:
         """The Inbox, Triaging one Capture: the one asked for, or else the
@@ -1040,16 +1052,24 @@ def create_app(
     def triage_from_page(
         request: Request,
         capture_id: int,
-        body: Annotated[TriageIn, Form()],
+        form: Annotated[TriageForm, Form()],
         session: SessionDep,
         today: TodayDep,
     ) -> Response:
         try:
-            _triage(session, capture_id, body, today)
+            _triage(
+                session,
+                capture_id,
+                to=form.to,
+                on=_optional_date(form.on),
+                month=_optional_month(form.month),
+                text=form.text,
+                today=today,
+            )
         except REFUSED_AS_INVALID as refused:
             # Refused before anything is written, so the Capture stays put.
             return render_inbox(
-                request, session, today, capture_id, adjusted=body, refused=str(refused)
+                request, session, today, capture_id, adjusted=form, refused=str(refused)
             )
         return RedirectResponse("/inbox", status_code=303)
 
@@ -1066,7 +1086,17 @@ def create_app(
     def triage_capture(
         capture_id: int, body: TriageIn, session: SessionDep, today: TodayDep
     ) -> EntryOut:
-        return _out(_triage(session, capture_id, body, today))
+        return _out(
+            _triage(
+                session,
+                capture_id,
+                to=body.to,
+                on=body.on,
+                month=_optional_month(body.month),
+                text=body.text,
+                today=today,
+            )
+        )
 
     @app.delete("/api/captures/{capture_id}", status_code=204)
     def delete_capture(capture_id: int, session: SessionDep) -> Response:

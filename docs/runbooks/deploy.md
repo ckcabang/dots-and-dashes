@@ -29,6 +29,8 @@ Prod never builds. Every merge to `main` builds `registry.fly.io/dots-and-dashes
 2. Deploy that earlier SHA exactly as above. Its image is already in prod's repository, so the run skips the copy.
 3. Check it as above, and that the alert that sent you here clears.
 
+A rollback restores the image only. The run reads `fly.prod.toml` from `main` as it is now, and Fly secrets stay as they are, so a bad change to env, VM size, a secret or a feature flag is undone there, not by rolling back.
+
 A rollback across a migration works as long as migrations only add to the schema: the older release's `dots-and-dashes migrate` sees the database at a revision it doesn't know, says so in the release log, and leaves the schema as it is. A migration that drops or renames something the older code reads breaks that, so split such a change across two releases (add, then remove once nothing reads the old shape). Images built before `dots-and-dashes migrate` existed fail the release command, so they can't be deployed to prod.
 
 ## Secrets it needs

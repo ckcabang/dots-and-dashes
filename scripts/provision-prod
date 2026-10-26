@@ -340,12 +340,26 @@ if [[ -z "$version" ]]; then
 fi
 say "Dev's last successful deploy: $version"
 if confirm "Deploy $version to prod now?"; then
+  # Run ids only grow, so the run this starts is the first one above the newest now.
+  before=$(gh run list --workflow deploy-prod.yml --limit 1 --json databaseId --jq '.[0].databaseId // 0')
   gh workflow run deploy-prod.yml --ref main -f version="$version"
   note "Waiting for the run to start…"
-  sleep 5
-  run_id=$(gh run list --workflow deploy-prod.yml --limit 1 --json databaseId --jq '.[0].databaseId')
-  gh run watch "$run_id" --exit-status \
-    || warn "The deploy failed; read why with: gh run view $run_id --log-failed"
+  run_id=""
+  for _ in $(seq 1 20); do
+    run_id=$(gh run list --workflow deploy-prod.yml --limit 5 --json databaseId,displayTitle \
+      --jq "[.[] | select(.databaseId > $before and .displayTitle == \"Deploy $version to prod\")][0].databaseId // empty")
+    [[ -n "$run_id" ]] && break
+    sleep 3
+  done
+  if [[ -z "$run_id" ]]; then
+    warn "The run didn't show up within a minute. Follow it under Actions → Deploy to prod, then re-run this wizard."
+    exit 1
+  fi
+  if ! gh run watch "$run_id" --exit-status; then
+    warn "The deploy failed, so prod has no Machine to create your User on yet."
+    note "Read why with: gh run view $run_id --log-failed. Fix it, then re-run this wizard."
+    exit 1
+  fi
 fi
 pause
 

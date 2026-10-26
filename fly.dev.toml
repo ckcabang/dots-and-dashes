@@ -14,7 +14,7 @@ primary_region = "iad"
 
 [env]
   SECURE_COOKIES = "on"
-  # Tells dev's telemetry apart from prod's in Grafana.
+  # Tells dev's telemetry apart from prod's: its signals' job is dev/dots-and-dashes.
   DEPLOYMENT_ENVIRONMENT = "dev"
 
 # Dev stops when idle and starts on the next request.

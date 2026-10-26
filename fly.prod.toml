@@ -2,7 +2,8 @@
 # version, through .github/workflows/deploy-prod.yml (docs/runbooks/deploy.md).
 # It never builds: it runs images dev already built and ran. One-time setup is
 # scripts/provision-prod. Secrets (DATABASE_URL, SESSION_SECRET,
-# FLAG_MONTHLY_REVIEW) are Fly secrets.
+# FLAG_MONTHLY_REVIEW, and the Grafana Cloud OTEL_EXPORTER_OTLP_ENDPOINT and
+# OTEL_EXPORTER_OTLP_HEADERS) are Fly secrets.
 app = "dots-and-dashes"
 primary_region = "iad"
 
@@ -14,6 +15,8 @@ primary_region = "iad"
 
 [env]
   SECURE_COOKIES = "on"
+  # Scopes the save alerts to prod: its signals' job is prod/dots-and-dashes.
+  DEPLOYMENT_ENVIRONMENT = "prod"
 
 # Prod is always on: the canary logs an Entry every minute.
 [http_service]

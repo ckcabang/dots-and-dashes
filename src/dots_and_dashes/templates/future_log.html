@@ -19,7 +19,7 @@
 {% for bucket in future_log %}
 <section aria-labelledby="month-{{ bucket.month.strftime('%Y-%m') }}">
   <h2 id="month-{{ bucket.month.strftime('%Y-%m') }}"><time datetime="{{ bucket.month.strftime('%Y-%m') }}">{{ bucket.month.strftime("%B %Y") }}</time></h2>
-  <ul class="entries">
+  <ul id="entries-{{ bucket.month.strftime('%Y-%m') }}" class="entries">
     {% for entry in bucket.entries %}{% include "_entry.html" %}{% endfor %}
   </ul>
 </section>

@@ -4,7 +4,7 @@ from collections.abc import Callable, Iterator
 from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Path as PathParam, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
@@ -57,6 +57,34 @@ class EntryOut(BaseModel):
     location: journal.Location
     month: date | None
     parent_id: int | None
+    migrated_from_id: int | None
+    migration_count: int
+
+
+class MigrationIn(BaseModel):
+    """Where to migrate or schedule a Task.
+
+    to is a Daily Log ("day", with date), a month's task list ("month", with
+    month), the Future Log ("future", with month and an optional date), or a
+    date ("date"), which lands on its Daily Log this month or in the Future Log.
+    night_before plans tomorrow rather than today.
+    """
+
+    to: Literal["day", "month", "future", "date"]
+    on: date | None = Field(None, alias="date")
+    month: str | None = Field(None, pattern=r"^\d{4}-\d{2}$")
+    night_before: bool = False
+
+
+class MigrationOut(BaseModel):
+    original: EntryOut
+    copy_: EntryOut = Field(serialization_alias="copy")
+
+
+class MovedEventIn(BaseModel):
+    """An Event's new date: Events move only by changing it."""
+
+    on: date = Field(alias="date")
 
 
 class DailyLogOut(BaseModel):
@@ -146,6 +174,54 @@ def _edit(session: Session, entry_id: int, text: str) -> journal.Entry:
     return persistence.save_entry(session, journal.edit_entry(entry, text))
 
 
+def _destination(body: MigrationIn, planning: date) -> journal.Destination:
+    month = _parse_month(body.month) if body.month else None
+    match body.to:
+        case "day" if body.on:
+            return journal.Destination.daily_log(body.on)
+        case "month" if month:
+            return journal.Destination.monthly_log(month)
+        case "future" if month:
+            return journal.Destination.future_log(month, on=body.on)
+        case "date" if body.on:
+            return journal.schedule_destination(body.on, planning=planning)
+    raise HTTPException(422, f"migrating to {body.to!r} needs a date or month")
+
+
+def _migrate(
+    request: Request, session: Session, entry_id: int, body: MigrationIn
+) -> tuple[journal.Entry, journal.Entry]:
+    """Migrate or Schedule a Task, moving its Nested Notes; the original and its copy."""
+    state = request.app.state
+    planning = journal.day_being_planned(
+        state.clock(), state.settings.timezone, night_before=body.night_before
+    )
+    task = persistence.get_entry(session, entry_id)
+    migration = journal.migrate(task, to=_destination(body, planning), planning=planning)
+    persistence.save_entry(session, migration.original)
+    copy = persistence.add_entry(session, migration.copy)
+    for note in journal.move_nested_notes(persistence.nested_notes(session, task.id), to=copy):
+        persistence.save_entry(session, note)
+    return persistence.get_entry(session, task.id), copy
+
+
+def _move_event(session: Session, entry_id: int, on: date) -> journal.Entry:
+    event = persistence.get_entry(session, entry_id)
+    moved, notes = journal.move_event(event, persistence.nested_notes(session, entry_id), on=on)
+    for note in notes:
+        persistence.save_entry(session, note)
+    return persistence.save_entry(session, moved)
+
+
+def _delete(session: Session, entry_id: int) -> None:
+    """Delete an Entry, re-linking its Migration Chain around it."""
+    entry = persistence.get_entry(session, entry_id)
+    successor = persistence.successor(session, entry_id)
+    if successor is not None:
+        persistence.save_entry(session, journal.relink_around(entry, successor))
+    persistence.delete_entry(session, entry_id)
+
+
 def _entry_fragment(request: Request, entry: journal.Entry) -> Response:
     return templates.TemplateResponse(request, "_entry.html", {"entry": entry})
 
@@ -200,6 +276,10 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
         if not journal.has_monthly_log(month, today=today):
             raise HTTPException(404, "months after the current one have no Monthly Log")
 
+    @app.exception_handler(journal.MigrationError)
+    def refuse_migration(request: Request, exc: journal.MigrationError) -> Response:
+        return JSONResponse({"detail": str(exc)}, status_code=422)
+
     @app.exception_handler(journal.TimedEntryMoveError)
     @app.exception_handler(journal.NestedNoteMoveError)
     @app.exception_handler(journal.UntimedEntryError)
@@ -223,6 +303,7 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
             request,
             "daily_log.html",
             {
+                "today": _today(request),
                 "day": day,
                 "previous_day": day - timedelta(days=1),
                 "next_day": day + timedelta(days=1),
@@ -273,8 +354,18 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
             return _entries_fragment(request, session, day)
         return RedirectResponse(f"/days/{day.isoformat()}", status_code=303)
 
-    # The nesting routes come before the Task State ones, whose {change}
-    # would otherwise also match "nest" and "un-nest".
+    # The nesting, migration and moving routes come before the Task State
+    # ones, whose {change} would otherwise also match their names.
+    @app.post("/entries/{entry_id}/migrate", response_class=HTMLResponse)
+    def migrate_from_page(
+        request: Request,
+        entry_id: int,
+        body: Annotated[MigrationIn, Form()],
+        session: SessionDep,
+    ) -> Response:
+        original, _ = _migrate(request, session, entry_id, body)
+        return _entry_fragment(request, original)
+
     @app.post("/entries/{entry_id}/nest", response_class=HTMLResponse)
     def nest_from_page(request: Request, entry_id: int, session: SessionDep) -> Response:
         entry = _nest(session, entry_id)
@@ -312,7 +403,7 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
 
     @app.delete("/entries/{entry_id}")
     def delete_entry_on_page(entry_id: int, session: SessionDep) -> Response:
-        persistence.delete_entry(session, entry_id)
+        _delete(session, entry_id)
         # HTMX swaps the Entry's line for this empty body.
         return Response(status_code=200)
 
@@ -349,6 +440,17 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
     def un_nest_entry(entry_id: int, session: SessionDep) -> EntryOut:
         return EntryOut.model_validate(_un_nest(session, entry_id), from_attributes=True)
 
+    @app.post("/api/entries/{entry_id}/migrate")
+    def migrate_entry(
+        request: Request, entry_id: int, body: MigrationIn, session: SessionDep
+    ) -> MigrationOut:
+        original, copy = _migrate(request, session, entry_id, body)
+        return MigrationOut(original=_out(original), copy_=_out(copy))
+
+    @app.post("/api/entries/{entry_id}/date")
+    def move_event(entry_id: int, body: MovedEventIn, session: SessionDep) -> EntryOut:
+        return _out(_move_event(session, entry_id, body.on))
+
     @app.post("/api/entries/{entry_id}/{change}")
     def change_task_state(entry_id: int, change: str, session: SessionDep) -> EntryOut:
         entry = _change_task_state(session, entry_id, change)
@@ -361,7 +463,7 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
 
     @app.delete("/api/entries/{entry_id}", status_code=204)
     def delete_entry(entry_id: int, session: SessionDep) -> Response:
-        persistence.delete_entry(session, entry_id)
+        _delete(session, entry_id)
         return Response(status_code=204)
 
     def daily_log_out(session: Session, day: date) -> DailyLogOut:
@@ -397,6 +499,7 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
             request,
             "monthly_log.html",
             {
+                "today": today,
                 "month": month,
                 "previous_month": (month - timedelta(days=1)).replace(day=1),
                 "next_month": next_month

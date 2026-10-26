@@ -15,11 +15,13 @@
     .entry--nested { padding-left: 1.5rem; }
     .entry:focus { outline: none; background: #eef; }
     .entry--cancelled .entry-text { text-decoration: line-through; color: #777; }
+    .entry--migrated .entry-text, .entry--scheduled .entry-text { color: #777; }
+    .migration-count { color: #a50; font-size: 0.85em; }
     .entry input { font: inherit; width: 100%; box-sizing: border-box; }
     .day-nav { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; }
   </style>
 </head>
-<body>
+<body{% if today is defined %} data-today="{{ today.isoformat() }}"{% endif %}>
   {% block content %}{% endblock %}
 </body>
 </html>

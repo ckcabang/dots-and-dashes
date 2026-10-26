@@ -15,13 +15,13 @@ up:
 # Integration tests use its Postgres; Playwright drives its app container.
 # Pass T to run some tests only, e.g. `make test T=tests/unit`.
 TEST_PROJECT := dots-and-dashes-test-$(shell printf '%s' '$(CURDIR)' | cksum | cut -d' ' -f1)
-TEST_STACK = COMPOSE_PROJECT_NAME=$(TEST_PROJECT) DB_PORT=0 APP_PORT=0
+TEST_STACK = COMPOSE_PROJECT_NAME=$(TEST_PROJECT) DB_PORT=0 APP_PORT=0 FLAG_MONTHLY_REVIEW=on
 # The host port the test stack published for a service's container port.
 test_port = $$($(TEST_STACK) docker compose port $(1) $(2) | sed 's/.*://')
 
 # Start the test stack, then run pytest on $(1) against it.
 define stack_pytest
-	$(TEST_STACK) docker compose up -d --build --wait
+	$(TEST_STACK) COMPOSE_PROGRESS=quiet docker compose up -d --build --wait
 	TEST_DATABASE_URL=postgresql+psycopg://dots:dots@localhost:$(call test_port,db,5432)/dots_and_dashes_test \
 	BASE_URL=http://localhost:$(call test_port,app,8000) \
 	uv run pytest $(1)

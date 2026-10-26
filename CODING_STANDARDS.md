@@ -17,7 +17,7 @@ The judgement calls a reviewer enforces. Mechanical rules are checks in `make ch
 
 ## CI
 
-- **A CI change works under the workflow's own triggers**, not just in the diff. A pull request restores only caches saved by itself or its base branch, and a cancelled run saves nothing. The PR cites the run log line that shows it working ("Cache restored", the step's duration).
+- **A CI change works under the workflow's own triggers**, not just in the diff. A pull request restores only caches saved by itself or its base branch, and a cancelled run saves nothing. The PR cites the run log line that shows it working ("Cache restored", the step's duration). A workflow that only runs after merge (push to `main`, `workflow_dispatch`) can't cite a run in its PR: the PR says how its first run will show it working, and that run's log line is posted on the PR after merge.
 
 ## Tests
 

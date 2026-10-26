@@ -59,7 +59,7 @@ def excluded_command(command: str) -> str | None:
             words = words[1:]
         if words[:1] == ["make"] and len(words) > 1 and words[1] in MAKE_TARGETS:
             return f"make {words[1]}"
-        if words[:2] == ["docker", "compose"] and len(words) > 2 and words[2] in COMPOSE_SUBCOMMANDS:
+        if words[:2] == ["docker", "compose"] and words[2:3] and words[2] in COMPOSE_SUBCOMMANDS:
             return f"docker compose {words[2]}"
         if words[:2] == ["docker", "ps"]:
             return "docker ps"

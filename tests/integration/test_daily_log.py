@@ -73,6 +73,67 @@ def test_quick_entry_from_htmx_returns_just_the_new_task(app_client):
     assert "buy milk" in added.text
 
 
+def test_a_future_dates_daily_log_can_be_opened(app_client):
+    with app_client() as client:
+        page = client.get("/days/2026-10-31")
+        daily_log = client.get("/api/daily-logs/2026-10-31")
+
+    assert page.status_code == 200
+    assert 'datetime="2026-10-31"' in page.text
+    assert daily_log.json() == {"date": "2026-10-31", "entries": []}
+
+
+def test_a_daily_log_links_to_the_previous_and_next_day(app_client):
+    with app_client() as client:
+        page = client.get("/days/2026-11-01")
+
+    assert 'href="/days/2026-10-31"' in page.text
+    assert 'href="/days/2026-11-02"' in page.text
+
+
+def test_choosing_a_date_opens_its_daily_log(app_client):
+    with app_client() as client:
+        chosen = client.get(
+            "/days", params={"date": "2026-12-25"}, follow_redirects=False
+        )
+
+    assert chosen.status_code == 303
+    assert chosen.headers["location"] == "/days/2026-12-25"
+
+
+def test_a_date_that_does_not_exist_has_no_daily_log(app_client):
+    with app_client() as client:
+        page = client.get("/days/2026-02-30")
+
+    assert page.status_code == 422
+
+
+def test_quick_entry_lands_on_the_daily_log_being_viewed(app_client):
+    with app_client() as client:
+        page = client.get("/days/2026-10-31")
+        submitted = client.post(
+            "/entries", data={"text": "pack bags", "day": "2026-10-31"}
+        )
+        viewed = client.get("/api/daily-logs/2026-10-31").json()
+        today = client.get("/api/daily-logs/today").json()
+
+    assert 'name="day" value="2026-10-31"' in page.text
+    assert "pack bags" in submitted.text
+    assert [entry["text"] for entry in viewed["entries"]] == ["pack bags"]
+    assert today["entries"] == []
+
+
+def test_an_entry_created_through_the_api_can_go_on_any_day(app_client):
+    with app_client() as client:
+        created = client.post(
+            "/api/entries", json={"text": "pack bags", "day": "2026-10-31"}
+        )
+        viewed = client.get("/api/daily-logs/2026-10-31").json()
+
+    assert created.json()["day"] == "2026-10-31"
+    assert [entry["text"] for entry in viewed["entries"]] == ["pack bags"]
+
+
 def test_the_prefix_sets_signifiers_type_and_time_on_todays_daily_log(app_client):
     with app_client() as client:
         for text in ["*!- idea", "o 7pm dinner", "*. 14:00 call mom", ".5 miles run"]:

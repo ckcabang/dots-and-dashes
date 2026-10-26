@@ -566,6 +566,147 @@ def test_once_its_month_arrives_an_entry_is_no_longer_in_the_future_log():
 
     assert future_log[0].month == date(2026, 12, 1)
     assert all(bucket.entries == [] for bucket in future_log)
+
+
+def _day(*entries: tuple[str, time | None]) -> list[journal.Entry]:
+    """A Daily Log's Entries in their manual order."""
+    return [_stored(id, text, at) for id, (text, at) in enumerate(entries, start=1)]
+
+
+def _by_text(entries: list[journal.Entry], text: str) -> journal.Entry:
+    return next(entry for entry in entries if entry.text == text)
+
+
+def test_an_untimed_entry_is_anchored_to_the_nearest_timed_entry_above_it():
+    daily_log = _day(
+        ("standup", time(9, 30)),
+        ("prep notes", None),
+        ("lunch", time(12, 0)),
+        ("book a table", None),
+        ("call back", None),
+    )
+
+    assert journal.anchor(daily_log, _by_text(daily_log, "prep notes").id) == (
+        _by_text(daily_log, "standup")
+    )
+    assert journal.anchor(daily_log, _by_text(daily_log, "call back").id) == (
+        _by_text(daily_log, "lunch")
+    )
+
+
+def test_untimed_entries_at_the_top_of_the_day_have_no_anchor():
+    daily_log = _day(("buy milk", None), ("standup", time(9, 30)))
+
+    assert journal.anchor(daily_log, _by_text(daily_log, "buy milk").id) is None
+
+
+def test_a_timed_entry_has_no_anchor():
+    daily_log = _day(("standup", time(9, 30)), ("lunch", time(12, 0)))
+
+    assert journal.anchor(daily_log, _by_text(daily_log, "lunch").id) is None
+
+
+def test_changing_a_timed_entrys_time_moves_its_anchored_entries_with_it():
+    daily_log = _day(
+        ("buy milk", None),
+        ("standup", time(9, 30)),
+        ("prep notes", None),
+        ("bring slides", None),
+        ("lunch", time(12, 0)),
+        ("book a table", None),
+    )
+
+    changed = journal.change_time(
+        daily_log, _by_text(daily_log, "standup").id, to=time(14, 0)
+    )
+
+    assert _texts(changed) == [
+        "buy milk",
+        "lunch",
+        "book a table",
+        "standup",
+        "prep notes",
+        "bring slides",
+    ]
+    assert _by_text(changed, "standup").time == time(14, 0)
+    assert journal.anchor(changed, _by_text(changed, "bring slides").id) == (
+        _by_text(changed, "standup")
+    )
+
+
+def test_a_timed_entry_moved_to_the_same_time_as_another_goes_after_it():
+    daily_log = _day(("standup", time(9, 30)), ("prep", None), ("lunch", time(12, 0)))
+
+    changed = journal.change_time(
+        daily_log, _by_text(daily_log, "standup").id, to=time(12, 0)
+    )
+
+    assert _texts(changed) == ["lunch", "standup", "prep"]
+
+
+def test_only_a_timed_entry_can_have_its_time_changed():
+    daily_log = _day(("standup", time(9, 30)), ("prep notes", None))
+
+    with pytest.raises(journal.UntimedEntryError):
+        journal.change_time(
+            daily_log, _by_text(daily_log, "prep notes").id, to=time(10, 0)
+        )
+
+
+def test_dragging_an_untimed_entry_re_anchors_it_to_the_timed_entry_now_above_it():
+    daily_log = _day(
+        ("standup", time(9, 30)),
+        ("prep notes", None),
+        ("lunch", time(12, 0)),
+        ("book a table", None),
+    )
+
+    moved = journal.move_entry(daily_log, _by_text(daily_log, "prep notes").id, to=3)
+
+    assert _texts(moved) == ["standup", "lunch", "book a table", "prep notes"]
+    assert journal.anchor(moved, _by_text(moved, "prep notes").id) == (
+        _by_text(moved, "lunch")
+    )
+
+
+def test_an_untimed_entry_reordered_among_its_anchors_followers_keeps_its_anchor():
+    daily_log = _day(("standup", time(9, 30)), ("prep notes", None), ("bring slides", None))
+
+    moved = journal.move_entry(daily_log, _by_text(daily_log, "bring slides").id, to=1)
+
+    assert _texts(moved) == ["standup", "bring slides", "prep notes"]
+    assert journal.anchor(moved, _by_text(moved, "bring slides").id) == (
+        _by_text(moved, "standup")
+    )
+
+
+def test_an_untimed_entry_dragged_to_the_top_of_the_day_loses_its_anchor():
+    daily_log = _day(("buy milk", None), ("standup", time(9, 30)), ("prep notes", None))
+
+    moved = journal.move_entry(daily_log, _by_text(daily_log, "prep notes").id, to=0)
+
+    assert _texts(moved) == ["prep notes", "buy milk", "standup"]
+    assert journal.anchor(moved, _by_text(moved, "prep notes").id) is None
+
+
+def test_a_move_past_either_end_of_the_daily_log_stops_at_that_end():
+    daily_log = _day(("standup", time(9, 30)), ("prep notes", None), ("lunch", time(12, 0)))
+
+    assert _texts(
+        journal.move_entry(daily_log, _by_text(daily_log, "prep notes").id, to=99)
+    ) == ["standup", "lunch", "prep notes"]
+    assert _texts(
+        journal.move_entry(daily_log, _by_text(daily_log, "prep notes").id, to=-1)
+    ) == ["prep notes", "standup", "lunch"]
+
+
+def test_a_timed_entry_cannot_be_dragged():
+    daily_log = _day(("standup", time(9, 30)), ("lunch", time(12, 0)))
+
+    with pytest.raises(journal.TimedEntryMoveError):
+        journal.move_entry(daily_log, _by_text(daily_log, "lunch").id, to=0)
+
+
 def _logged(
     id: int,
     type: journal.EntryType,
@@ -672,6 +813,43 @@ def test_a_nested_notes_time_does_not_make_it_an_anchor():
         "9am call to confirm",
         "pick up prescription",
     ]
+
+
+def test_changing_a_timed_entrys_time_takes_nested_notes_along_with_its_followers():
+    daily_log = [
+        _logged(1, EVENT, "standup", time(9, 30)),
+        _logged(2, NOTE, "room 4", parent_id=1),
+        _logged(3, TASK, "prep notes"),
+        _logged(4, NOTE, "use last week's", parent_id=3),
+        _logged(5, EVENT, "lunch", time(12, 0)),
+    ]
+
+    changed = journal.change_time(daily_log, 1, to=time(14, 0))
+
+    assert _texts(changed) == ["lunch", "standup", "room 4", "prep notes", "use last week's"]
+
+
+def test_a_dragged_task_takes_its_nested_notes_and_never_lands_inside_another_tasks():
+    daily_log = [
+        _logged(1, TASK, "buy milk"),
+        _logged(2, NOTE, "oat", parent_id=1),
+        _logged(3, EVENT, "standup", time(9, 30)),
+        _logged(4, TASK, "prep notes"),
+        _logged(5, NOTE, "use last week's", parent_id=4),
+    ]
+
+    # Index 2 of the rest of the Daily Log is between "prep notes" and its Nested Note.
+    moved = journal.move_entry(daily_log, 1, to=2)
+
+    assert _texts(moved) == ["standup", "prep notes", "use last week's", "buy milk", "oat"]
+    assert journal.anchor(moved, 1) == daily_log[2]
+
+
+def test_a_nested_note_moves_only_with_its_parent():
+    daily_log = [_logged(1, TASK, "buy milk"), _logged(2, NOTE, "oat", parent_id=1)]
+
+    with pytest.raises(journal.NestedNoteMoveError):
+        journal.move_entry(daily_log, 2, to=0)
 
 
 def test_editing_a_nested_note_keeps_it_nested():

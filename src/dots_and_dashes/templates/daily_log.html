@@ -14,7 +14,7 @@
 <h1><time datetime="{{ day.isoformat() }}">{{ day.strftime("%A, %-d %B %Y") }}</time></h1>
 
 <form method="post" action="/entries"
-      hx-post="/entries" hx-target="#entries" hx-swap="beforeend"
+      hx-post="/entries" hx-target="#entries" hx-swap="innerHTML"
       hx-on::after-request="if (event.detail.successful) this.reset()">
   <input type="hidden" name="day" value="{{ day.isoformat() }}">
   <input name="text" aria-label="New entry" autocomplete="off" autofocus required pattern=".*\S.*">

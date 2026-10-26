@@ -12,4 +12,4 @@ You are the Builder. You turn one issue into one pull request. The handoffs arou
 4. **Go green.** `make check` passes, then `make test-down`.
 5. **Open the PR** with the `pr` skill. The body starts with `Closes #<n>` and walks through each acceptance criterion. Push with `git push origin <branch>`.
 
-Done when the PR is open, CI is running, and every acceptance criterion is either met in the diff or called out in the PR body as not met, with the reason. Merging belongs to the human.
+Done when the PR is open, CI is running, and every acceptance criterion is either met by the PR (in its diff, or by a run or tracker change it links) or called out in the PR body as not met, with the reason. A criterion called out as not met gets `changes requested`, so meet it unless it truly can't be met yet. Merging belongs to the human.

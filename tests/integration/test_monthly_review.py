@@ -8,7 +8,6 @@ from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
-from fastapi.testclient import TestClient
 
 from dots_and_dashes.settings import Settings
 from dots_and_dashes.web import create_app
@@ -24,14 +23,14 @@ def flagged(settings):
 
 
 @pytest.fixture
-def october(flagged, clock):
-    with TestClient(create_app(flagged, clock=clock)) as client:
+def october(flagged, clock, logged_in):
+    with logged_in(create_app(flagged, clock=clock)) as client:
         yield client
 
 
 @pytest.fixture
-def november(flagged):
-    with TestClient(create_app(flagged, clock=lambda: FIRST)) as client:
+def november(flagged, logged_in):
+    with logged_in(create_app(flagged, clock=lambda: FIRST)) as client:
         yield client
 
 
@@ -48,8 +47,8 @@ def _texts(entries):
     return [entry["text"] for entry in entries]
 
 
-def test_with_the_flag_off_the_monthly_review_is_hidden_and_unavailable(settings):
-    with TestClient(create_app(settings, clock=lambda: FIRST)) as client:
+def test_with_the_flag_off_the_monthly_review_is_hidden_and_unavailable(settings, logged_in):
+    with logged_in(create_app(settings, clock=lambda: FIRST)) as client:
         monthly_log = client.get("/months/2026-11").text
         responses = [
             client.get("/monthly-review"),
@@ -158,11 +157,11 @@ def test_an_undated_event_is_pulled_once_it_is_given_a_date(october, november):
     ]
 
 
-def test_the_monthly_review_still_works_when_opened_after_the_first(october, flagged):
+def test_the_monthly_review_still_works_when_opened_after_the_first(october, flagged, logged_in):
     _log(october, "write report")
     _log_future(october, "flu jab", on="2026-11-03")
 
-    with TestClient(create_app(flagged, clock=lambda: TWELFTH)) as twelfth:
+    with logged_in(create_app(flagged, clock=lambda: TWELFTH)) as twelfth:
         review = twelfth.get("/api/monthly-review").json()
         twelfth.post("/api/monthly-review/pull")
         page = twelfth.get("/monthly-review")

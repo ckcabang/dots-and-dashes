@@ -6,6 +6,7 @@ missing and rebuilt with Alembic once per run.
 """
 
 import os
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -13,14 +14,17 @@ from zoneinfo import ZoneInfo
 import pytest
 from alembic import command
 from alembic.config import Config
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, make_url, text
 
+from dots_and_dashes import cli
 from dots_and_dashes.settings import Settings
 
 TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL", "")
 
-# 03:00 UTC on 26 Oct is still 25 Oct in Los Angeles, so tests that see
-# 2026-10-25 as "today" prove the User's timezone is applied.
+# 03:00 UTC on 26 Oct is still 25 Oct in the User's Los Angeles, so tests
+# that see 2026-10-25 as "today" prove the User's timezone is applied.
 NOW = datetime(2026, 10, 26, 3, 0, tzinfo=UTC)
 TIMEZONE = ZoneInfo("America/Los_Angeles")
 
@@ -68,9 +72,49 @@ def database_url() -> str:
 def settings(database_url: str) -> Settings:
     engine = create_engine(database_url)
     with engine.begin() as conn:
-        conn.execute(text("TRUNCATE entries RESTART IDENTITY"))
+        conn.execute(text("TRUNCATE entries, users RESTART IDENTITY"))
     engine.dispose()
-    return Settings(database_url=database_url, timezone=TIMEZONE)
+    return Settings(database_url=database_url)
+
+
+PASSWORD = "correct horse battery staple"
+EMAIL = "me@example.com"
+
+
+@pytest.fixture
+def create_user(settings, monkeypatch):
+    """Create a User the way the operator does: with the CLI, the password from a secret."""
+
+    def create(email: str, *, timezone: str = TIMEZONE.key, canary: bool = False) -> str:
+        monkeypatch.setenv("DATABASE_URL", settings.database_url)
+        monkeypatch.setenv("USER_PASSWORD", PASSWORD)
+        cli.main(
+            ["create-user", "--email", email, "--timezone", timezone]
+            + (["--canary"] if canary else [])
+        )
+        return email
+
+    return create
+
+
+@pytest.fixture
+def user(create_user) -> str:
+    """The User, in Los Angeles: their email."""
+    return create_user(EMAIL)
+
+
+@pytest.fixture
+def logged_in(user):
+    """Start a client on an app, logged in as the User or another User's email."""
+
+    @contextmanager
+    def start(app: FastAPI, email: str = user, **client_args):
+        with TestClient(app, **client_args) as client:
+            response = client.post("/login", data={"email": email, "password": PASSWORD})
+            assert response.status_code in (200, 303), response.text
+            yield client
+
+    return start
 
 
 @pytest.fixture

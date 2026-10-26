@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+
+{% block title %}Log in · Dots & Dashes{% endblock %}
+
+{% block content %}
+<h1>Dots & Dashes</h1>
+
+<form method="post" action="/login" class="login">
+  {% if refused %}<p role="alert">That email and password don't match.</p>{% endif %}
+  <label>Email <input type="email" name="email" value="{{ email or '' }}" autocomplete="username" autofocus required></label>
+  <label>Password <input type="password" name="password" autocomplete="current-password" required></label>
+  <button>Log in</button>
+</form>
+
+<script>
+  // The autofocus attribute is not always honoured, so typing starts in Email.
+  document.querySelector(".login [autofocus]").focus();
+</script>
+{% endblock %}

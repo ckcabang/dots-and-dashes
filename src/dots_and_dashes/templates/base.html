@@ -19,9 +19,15 @@
     .migration-count { color: #a50; font-size: 0.85em; }
     .entry input { font: inherit; width: 100%; box-sizing: border-box; }
     .day-nav { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; }
+    .login label { display: block; margin: 0.5rem 0; }
+    .logout { text-align: right; }
   </style>
 </head>
 <body{% if today is defined %} data-today="{{ today.isoformat() }}"{% endif %}>
+  {# Journal pages pass today, and only they are behind a login. #}
+  {% if today is defined %}
+  <form method="post" action="/logout" class="logout"><button>Log out</button></form>
+  {% endif %}
   {% block content %}{% endblock %}
 </body>
 </html>

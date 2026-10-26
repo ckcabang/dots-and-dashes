@@ -4,6 +4,7 @@ from collections.abc import Iterable
 from dataclasses import replace
 from datetime import date, datetime
 from datetime import time as TimeOfDay
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import (
     Boolean,
@@ -15,24 +16,56 @@ from sqlalchemy import (
     String,
     Text,
     Time,
+    event,
     false,
     func,
     or_,
     select,
+    update,
 )
-from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
+from sqlalchemy.orm import (
+    DeclarativeBase,
+    Mapped,
+    ORMExecuteState,
+    Session,
+    mapped_column,
+    with_loader_criteria,
+)
 
-from dots_and_dashes import journal
+from dots_and_dashes import accounts, journal
+
+# The session.info key naming the User a session reads and writes the journal of.
+USER_ID = "user_id"
 
 
 class Base(DeclarativeBase):
     pass
 
 
+class UserRow(Base):
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(Identity(), primary_key=True)
+    email: Mapped[str] = mapped_column(String(320), unique=True)
+    password_hash: Mapped[str] = mapped_column(Text)
+    # An IANA name, such as America/Los_Angeles.
+    timezone: Mapped[str] = mapped_column(String(64))
+    canary: Mapped[bool] = mapped_column(Boolean, server_default=false())
+
+    def to_user(self) -> accounts.User:
+        return accounts.User(
+            id=self.id, email=self.email, timezone=ZoneInfo(self.timezone), canary=self.canary
+        )
+
+
 class EntryRow(Base):
     __tablename__ = "entries"
 
     id: Mapped[int] = mapped_column(Identity(), primary_key=True)
+    # Entries logged before Users existed have none until the first User claims them.
+    user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
     type: Mapped[str] = mapped_column(String(16))
     # Only Tasks have a Task State.
     state: Mapped[str | None] = mapped_column(String(16))
@@ -76,6 +109,25 @@ class EntryRow(Base):
             parent_id=self.parent_id,
             migrated_from_id=self.migrated_from_id,
         )
+
+
+@event.listens_for(Session, "do_orm_execute")
+def _only_the_users_entries(state: ORMExecuteState) -> None:
+    """Every Entry a session reads is its User's. A session with no User reads none."""
+    if not state.is_select:
+        return
+    user_id = state.session.info.get(USER_ID)
+    owned = (lambda cls: cls.user_id == user_id) if user_id is not None else (lambda cls: false())
+    state.statement = state.statement.options(
+        with_loader_criteria(EntryRow, owned, include_aliases=True)
+    )
+
+
+def _user_id(session: Session) -> int:
+    try:
+        return session.info[USER_ID]
+    except KeyError:
+        raise RuntimeError("this session has no User to log Entries for") from None
 
 
 class EntryNotFoundError(LookupError):
@@ -135,7 +187,7 @@ def _loaded(session: Session, rows: Iterable[EntryRow]) -> list[journal.Entry]:
 
 def add_entry(session: Session, new_entry: journal.NewEntry) -> journal.Entry:
     """Store a new Entry. Its place in a Daily Log's order is stored with save_daily_log."""
-    row = EntryRow(**_columns(new_entry), position=0)
+    row = EntryRow(**_columns(new_entry), user_id=_user_id(session), position=0)
     session.add(row)
     session.flush()
     [entry] = _loaded(session, [row])
@@ -295,3 +347,37 @@ def future_log_month(session: Session, month: date) -> list[journal.Entry]:
         .order_by(EntryRow.id)
     )
     return _loaded(session, rows)
+
+
+class DuplicateUserError(ValueError):
+    """Raised when a User with that email already exists."""
+
+
+def create_user(
+    session: Session, email: str, password_hash: str, timezone: ZoneInfo, *, canary: bool
+) -> accounts.User:
+    """Store a new User. The first real User claims the Entries logged before Users existed."""
+    email = accounts.normalise_email(email)
+    if session.scalars(select(UserRow).where(UserRow.email == email)).first():
+        raise DuplicateUserError(f"a User with email {email!r} already exists")
+    row = UserRow(email=email, password_hash=password_hash, timezone=timezone.key, canary=canary)
+    session.add(row)
+    session.flush()
+    if not canary:
+        session.execute(
+            update(EntryRow).where(EntryRow.user_id.is_(None)).values(user_id=row.id)
+        )
+    return row.to_user()
+
+
+def user_by_email(session: Session, email: str) -> tuple[accounts.User, str] | None:
+    """The User with an email, and their password hash."""
+    row = session.scalars(
+        select(UserRow).where(UserRow.email == accounts.normalise_email(email))
+    ).first()
+    return (row.to_user(), row.password_hash) if row else None
+
+
+def get_user(session: Session, user_id: int) -> accounts.User | None:
+    row = session.get(UserRow, user_id)
+    return row.to_user() if row else None

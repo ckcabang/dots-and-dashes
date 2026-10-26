@@ -1,14 +1,13 @@
 """The Monthly Log and the Future Log. Today is 2026-10-25 (see conftest)."""
 
 import pytest
-from fastapi.testclient import TestClient
 
 from dots_and_dashes.web import create_app
 
 
 @pytest.fixture
-def client(settings, clock):
-    with TestClient(create_app(settings, clock=clock)) as client:
+def client(settings, clock, logged_in):
+    with logged_in(create_app(settings, clock=clock)) as client:
         yield client
 
 

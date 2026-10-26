@@ -360,6 +360,212 @@ def test_timed_entries_at_the_same_time_keep_the_order_they_were_logged():
     assert _texts(journal.daily_log_order(logged)) == ["call mom", "call dad"]
 
 
+@pytest.mark.parametrize(
+    ("month", "has_one"),
+    [
+        (date(2026, 10, 1), True),
+        (date(2025, 3, 1), True),
+        (date(2026, 11, 1), False),
+        (date(2027, 1, 1), False),
+    ],
+)
+def test_only_the_current_and_past_months_have_a_monthly_log(month, has_one):
+    assert journal.has_monthly_log(month, today=date(2026, 10, 25)) is has_one
+
+
+def test_in_december_january_is_the_first_month_of_the_future_log():
+    today = date(2026, 12, 31)
+
+    assert journal.has_monthly_log(date(2026, 12, 1), today=today)
+    assert not journal.has_monthly_log(date(2027, 1, 1), today=today)
+    assert journal.next_month(date(2026, 12, 1)) == date(2027, 1, 1)
+
+
+def test_text_logged_on_a_monthly_log_goes_on_that_months_task_list():
+    entry = journal.log_month_entry(
+        "*. renew passport", month=date(2026, 10, 1), today=date(2026, 10, 25)
+    )
+
+    assert entry == journal.NewEntry(
+        type=journal.EntryType.TASK,
+        state=journal.TaskState.OPEN,
+        priority=True,
+        inspiration=False,
+        time=None,
+        text="renew passport",
+        day=None,
+        location=journal.Location.MONTH,
+        month=date(2026, 10, 1),
+    )
+
+
+def test_a_past_months_task_list_can_take_entries():
+    entry = journal.log_month_entry(
+        "- look back", month=date(2026, 9, 1), today=date(2026, 10, 25)
+    )
+
+    assert (entry.location, entry.month) == (journal.Location.MONTH, date(2026, 9, 1))
+
+
+def test_a_month_after_the_current_one_has_no_task_list_to_log_on():
+    with pytest.raises(journal.NoMonthlyLogError):
+        journal.log_month_entry(
+            "renew passport", month=date(2026, 11, 1), today=date(2026, 10, 25)
+        )
+
+
+def test_an_event_needs_a_date_so_it_cannot_go_on_a_months_task_list():
+    with pytest.raises(journal.EventNeedsDateError):
+        journal.log_month_entry(
+            "o conference", month=date(2026, 10, 1), today=date(2026, 10, 25)
+        )
+
+
+def test_a_monthly_log_entry_needs_text():
+    with pytest.raises(journal.BlankEntryError):
+        journal.log_month_entry(". ", month=date(2026, 10, 1), today=date(2026, 10, 25))
+
+
+def test_text_logged_on_the_future_log_goes_under_its_month():
+    entry = journal.log_future_entry(
+        "o Sam's wedding", month=date(2027, 3, 1), today=date(2026, 10, 25)
+    )
+
+    assert entry == journal.NewEntry(
+        type=journal.EntryType.EVENT,
+        state=None,
+        priority=False,
+        inspiration=False,
+        time=None,
+        text="Sam's wedding",
+        day=None,
+        location=journal.Location.FUTURE,
+        month=date(2027, 3, 1),
+    )
+
+
+def test_a_future_log_entry_can_carry_a_specific_date_in_its_month():
+    entry = journal.log_future_entry(
+        "renew passport",
+        month=date(2027, 3, 1),
+        on=date(2027, 3, 3),
+        today=date(2026, 10, 25),
+    )
+
+    assert (entry.day, entry.month) == (date(2027, 3, 3), date(2027, 3, 1))
+
+
+def test_a_future_log_date_must_fall_in_its_month():
+    with pytest.raises(journal.DateOutsideMonthError):
+        journal.log_future_entry(
+            "renew passport",
+            month=date(2027, 3, 1),
+            on=date(2027, 4, 3),
+            today=date(2026, 10, 25),
+        )
+
+
+@pytest.mark.parametrize("month", [date(2026, 10, 1), date(2026, 9, 1)])
+def test_the_future_log_only_holds_months_after_the_current_one(month):
+    with pytest.raises(journal.NotAFutureMonthError):
+        journal.log_future_entry("renew passport", month=month, today=date(2026, 10, 25))
+
+
+def test_in_december_january_entries_go_in_the_future_log():
+    entry = journal.log_future_entry(
+        "file taxes", month=date(2027, 1, 1), today=date(2026, 12, 31)
+    )
+
+    assert entry.month == date(2027, 1, 1)
+
+
+def _on_day(id: int, text: str, *, day: date) -> journal.Entry:
+    new = journal.log_entry(text, on=day)
+    return journal.Entry(
+        id=id,
+        type=new.type,
+        state=new.state,
+        priority=new.priority,
+        inspiration=new.inspiration,
+        time=new.time,
+        text=new.text,
+        day=new.day,
+    )
+
+
+def test_a_monthly_logs_calendar_lists_every_day_with_that_days_events():
+    dentist = _on_day(1, "o 9am dentist", day=date(2027, 2, 3))
+    call = _on_day(2, "call bank", day=date(2027, 2, 3))
+    party = _on_day(3, "o party", day=date(2027, 2, 28))
+    lunch = _on_day(4, "o lunch", day=date(2027, 2, 3))
+
+    calendar = journal.monthly_calendar(date(2027, 2, 1), [dentist, call, party, lunch])
+
+    assert len(calendar) == 28
+    assert calendar[0] == journal.CalendarDay(day=date(2027, 2, 1), events=[])
+    assert calendar[2] == journal.CalendarDay(day=date(2027, 2, 3), events=[dentist, lunch])
+    assert calendar[27] == journal.CalendarDay(day=date(2027, 2, 28), events=[party])
+
+
+def test_a_calendar_leaves_out_events_from_other_months():
+    stray = _on_day(1, "o party", day=date(2027, 3, 1))
+
+    calendar = journal.monthly_calendar(date(2027, 2, 1), [stray])
+
+    assert all(day.events == [] for day in calendar)
+
+
+def _in_future_log(id: int, text: str, *, month: date, on: date | None = None) -> journal.Entry:
+    new = journal.log_future_entry(text, month=month, on=on, today=date(2026, 10, 25))
+    return journal.Entry(
+        id=id,
+        type=new.type,
+        state=new.state,
+        priority=new.priority,
+        inspiration=new.inspiration,
+        time=new.time,
+        text=new.text,
+        day=new.day,
+        location=new.location,
+        month=new.month,
+    )
+
+
+def test_the_future_log_groups_entries_into_the_months_after_the_current_one():
+    wedding = _in_future_log(1, "o wedding", month=date(2027, 1, 1))
+    taxes = _in_future_log(2, "file taxes", month=date(2026, 11, 1))
+    trip = _in_future_log(3, "o trip", month=date(2027, 9, 1))
+
+    future_log = journal.future_log([wedding, taxes, trip], today=date(2026, 10, 25))
+
+    assert [(bucket.month, bucket.entries) for bucket in future_log] == [
+        (date(2026, 11, 1), [taxes]),
+        (date(2026, 12, 1), []),
+        (date(2027, 1, 1), [wedding]),
+        (date(2027, 2, 1), []),
+        (date(2027, 3, 1), []),
+        (date(2027, 4, 1), []),
+        (date(2027, 9, 1), [trip]),
+    ]
+
+
+def test_dated_future_log_entries_come_first_in_date_order():
+    undated = _in_future_log(1, "plan trip", month=date(2026, 11, 1))
+    late = _in_future_log(2, "o party", month=date(2026, 11, 1), on=date(2026, 11, 20))
+    early = _in_future_log(3, "o dentist", month=date(2026, 11, 1), on=date(2026, 11, 2))
+
+    future_log = journal.future_log([undated, late, early], today=date(2026, 10, 25))
+
+    assert future_log[0].entries == [early, late, undated]
+
+
+def test_once_its_month_arrives_an_entry_is_no_longer_in_the_future_log():
+    taxes = _in_future_log(1, "file taxes", month=date(2026, 11, 1))
+
+    future_log = journal.future_log([taxes], today=date(2026, 11, 1))
+
+    assert future_log[0].month == date(2026, 12, 1)
+    assert all(bucket.entries == [] for bucket in future_log)
 def _logged(
     id: int,
     type: journal.EntryType,
@@ -480,3 +686,85 @@ def test_editing_a_nested_note_into_a_task_un_nests_it():
     edited = journal.edit_entry(note, ". bring card")
 
     assert (edited.type, edited.parent_id) == (TASK, None)
+
+
+def test_a_daily_log_entry_is_on_its_days_daily_log():
+    entry = _on_day(1, "- idea", day=date(2026, 10, 25))
+
+    assert journal.daily_log_day(entry) == date(2026, 10, 25)
+
+
+def test_monthly_and_future_log_entries_are_not_on_a_daily_log():
+    dated = _in_future_log(1, "o wedding", month=date(2027, 3, 1), on=date(2027, 3, 3))
+
+    with pytest.raises(journal.NotOnADailyLogError):
+        journal.daily_log_day(dated)
+
+
+def _on_monthly_log(id: int, text: str, *, month: date) -> journal.Entry:
+    new = journal.log_month_entry(text, month=month, today=date(2026, 10, 25))
+    return journal.Entry(
+        id=id,
+        type=new.type,
+        state=new.state,
+        priority=new.priority,
+        inspiration=new.inspiration,
+        time=new.time,
+        text=new.text,
+        day=new.day,
+        location=new.location,
+        month=new.month,
+    )
+
+
+def test_editing_a_monthly_log_entry_keeps_it_on_that_months_task_list():
+    task = _on_monthly_log(1, "pay rent", month=date(2026, 10, 1))
+
+    edited = journal.edit_entry(task, "* pay rent and bills")
+
+    assert (edited.location, edited.month, edited.day) == (
+        journal.Location.MONTH,
+        date(2026, 10, 1),
+        None,
+    )
+    assert (edited.text, edited.priority) == ("pay rent and bills", True)
+
+
+def test_a_monthly_log_entry_cannot_be_edited_into_an_event():
+    task = _on_monthly_log(1, "pay rent", month=date(2026, 10, 1))
+
+    with pytest.raises(journal.EventNeedsDateError):
+        journal.edit_entry(task, "o pay rent")
+
+
+def test_editing_a_future_log_entry_keeps_its_month_and_date():
+    task = _in_future_log(1, "book flights", month=date(2027, 3, 1), on=date(2027, 3, 3))
+
+    edited = journal.edit_entry(task, "book flights to Lisbon")
+
+    assert (edited.location, edited.month, edited.day) == (
+        journal.Location.FUTURE,
+        date(2027, 3, 1),
+        date(2027, 3, 3),
+    )
+
+
+def test_an_undated_future_log_entry_can_be_edited_into_an_event():
+    task = _in_future_log(1, "wedding", month=date(2027, 3, 1))
+
+    edited = journal.edit_entry(task, "o wedding")
+
+    assert (edited.type, edited.state, edited.location, edited.day) == (
+        EVENT,
+        None,
+        journal.Location.FUTURE,
+        None,
+    )
+
+
+def test_completing_a_monthly_log_task_keeps_it_on_the_monthly_log():
+    task = _on_monthly_log(1, "pay rent", month=date(2026, 10, 1))
+
+    completed = journal.complete(task)
+
+    assert (completed.location, completed.month) == (journal.Location.MONTH, date(2026, 10, 1))

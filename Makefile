@@ -1,4 +1,4 @@
-.PHONY: setup up test typecheck
+.PHONY: setup up test typecheck check
 
 # Install dependencies and the browser Playwright drives.
 setup:
@@ -20,3 +20,6 @@ test:
 
 typecheck:
 	uv run mypy
+
+# Everything CI should gate on.
+check: typecheck test

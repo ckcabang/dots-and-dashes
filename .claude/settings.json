@@ -65,7 +65,8 @@
           "make test-down",
           "make test-integration",
           "make test-browser"
-        ]
+        ],
+"network": { "allowedDomains": ["dots-and-dashes-dev.fly.dev", "dots-and-dashes.fly.dev"] }
       },
 "hooks": {
   "PreToolUse": [

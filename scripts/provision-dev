@@ -270,6 +270,7 @@ else
   say "Generating a password, stored only as Fly secrets: POSTGRES_PASSWORD on"
   say "$DB_APP and the DATABASE_URL that $APP connects with."
   pw=$(openssl rand -hex 24)
+  # User and database are POSTGRES_USER and POSTGRES_DB in fly.dev-db.toml.
   printf 'POSTGRES_PASSWORD=%s\n' "$pw" | flyctl secrets import --stage -a "$DB_APP"
   printf 'DATABASE_URL=postgresql+psycopg://dots:%s@%s.flycast:5432/dots_and_dashes\n' "$pw" "$DB_APP" \
     | flyctl secrets import --stage -a "$APP"
@@ -284,8 +285,12 @@ else
   say "Generating SESSION_SECRET, which signs the login cookie."
   printf 'SESSION_SECRET=%s\n' "$(openssl rand -hex 32)" | flyctl secrets import --stage -a "$APP"
 fi
-say "Turning on the Monthly Review flag on dev."
-flyctl secrets set --stage -a "$APP" FLAG_MONTHLY_REVIEW=on
+if has_secret "$APP" FLAG_MONTHLY_REVIEW; then
+  note "FLAG_MONTHLY_REVIEW is already set; left as is (On-call may have turned it off)."
+else
+  say "Turning on the Monthly Review flag on dev."
+  flyctl secrets set --stage -a "$APP" FLAG_MONTHLY_REVIEW=on
+fi
 pause
 
 stage "Start dev's Postgres"
@@ -325,6 +330,8 @@ say "Machine. It asks for the password; type it there."
 ask DEV_EMAIL "Email to log in with:"
 ask DEV_TIMEZONE "Your timezone, an IANA name (e.g. America/Los_Angeles):"
 if confirm "Create $DEV_EMAIL on $APP?"; then
+  # Wake the Machine, which may have auto-stopped while you read.
+  curl -fsS -o /dev/null "https://$APP.fly.dev/login" || true
   flyctl ssh console -a "$APP" --pty \
     -C "/app/.venv/bin/dots-and-dashes create-user --email '$DEV_EMAIL' --timezone '$DEV_TIMEZONE'"
 fi

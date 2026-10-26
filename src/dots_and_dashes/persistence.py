@@ -111,15 +111,32 @@ class EntryRow(Base):
         )
 
 
+class CaptureRow(Base):
+    __tablename__ = "captures"
+
+    id: Mapped[int] = mapped_column(Identity(), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    # Raw, exactly as captured: Triage reads it with the Prefix rules.
+    text: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    def to_capture(self) -> journal.Capture:
+        return journal.Capture(id=self.id, text=self.text)
+
+
 @event.listens_for(Session, "do_orm_execute")
 def _only_the_users_entries(state: ORMExecuteState) -> None:
-    """Every Entry a session reads is its User's. A session with no User reads none."""
+    """Every Entry and Capture a session reads is its User's. A session with no
+    User reads none."""
     if not state.is_select:
         return
     user_id = state.session.info.get(USER_ID)
     owned = (lambda cls: cls.user_id == user_id) if user_id is not None else (lambda cls: false())
     state.statement = state.statement.options(
-        with_loader_criteria(EntryRow, owned, include_aliases=True)
+        with_loader_criteria(EntryRow, owned, include_aliases=True),
+        with_loader_criteria(CaptureRow, owned, include_aliases=True),
     )
 
 
@@ -347,6 +364,41 @@ def future_log_month(session: Session, month: date) -> list[journal.Entry]:
         .order_by(EntryRow.id)
     )
     return _loaded(session, rows)
+
+
+class CaptureNotFoundError(LookupError):
+    """Raised when no stored Capture in the Inbox has the id asked for."""
+
+
+def add_capture(session: Session, new_capture: journal.NewCapture) -> journal.Capture:
+    """Store a Capture in the User's Inbox."""
+    row = CaptureRow(text=new_capture.text, user_id=_user_id(session))
+    session.add(row)
+    session.flush()
+    return row.to_capture()
+
+
+def inbox(session: Session) -> list[journal.Capture]:
+    """The Captures in the Inbox, in the order they were captured."""
+    rows = session.scalars(select(CaptureRow).order_by(CaptureRow.id))
+    return [row.to_capture() for row in rows]
+
+
+def _capture_row(session: Session, capture_id: int) -> CaptureRow:
+    row = session.get(CaptureRow, capture_id)
+    if row is None:
+        raise CaptureNotFoundError(f"no Capture {capture_id} in the Inbox")
+    return row
+
+
+def get_capture(session: Session, capture_id: int) -> journal.Capture:
+    return _capture_row(session, capture_id).to_capture()
+
+
+def delete_capture(session: Session, capture_id: int) -> None:
+    """Take a Capture out of the Inbox for good: Deleted, or Triaged into an Entry."""
+    session.delete(_capture_row(session, capture_id))
+    session.flush()
 
 
 class DuplicateUserError(ValueError):

@@ -169,6 +169,20 @@ class MonthlyReviewOut(BaseModel):
     needs_a_date: list[WaitingEventOut]
 
 
+class NewCaptureIn(BaseModel):
+    text: str
+
+
+class CaptureOut(BaseModel):
+    id: int
+    text: str
+
+
+class InboxOut(BaseModel):
+    count: int
+    captures: list[CaptureOut]
+
+
 def _parse_month(value: str) -> date:
     """Read a month written YYYY-MM as the date of its first day."""
     try:
@@ -183,6 +197,10 @@ def _month_param(month: Annotated[str, PathParam(pattern=r"^\d{4}-\d{2}$")]) -> 
 
 def _out(entry: journal.Entry) -> EntryOut:
     return EntryOut.model_validate(entry, from_attributes=True)
+
+
+def _capture_out(capture: journal.Capture) -> CaptureOut:
+    return CaptureOut(id=capture.id, text=capture.text)
 
 
 # A login lasts 30 days, on desktop and phone alike. The session lives only in
@@ -404,6 +422,7 @@ def _rearrange(
 # Journal rules that refuse a request, answered 422 with the reason.
 REFUSED_AS_INVALID: tuple[type[ValueError], ...] = (
     journal.BlankEntryError,
+    journal.BlankCaptureError,
     journal.PlacementError,
     journal.MigrationError,
     journal.TimedEntryMoveError,
@@ -492,7 +511,8 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
         return JSONResponse({"detail": str(exc)}, status_code=409)
 
     @app.exception_handler(persistence.EntryNotFoundError)
-    def entry_not_found(request: Request, exc: persistence.EntryNotFoundError) -> Response:
+    @app.exception_handler(persistence.CaptureNotFoundError)
+    def not_found(request: Request, exc: LookupError) -> Response:
         return JSONResponse({"detail": str(exc)}, status_code=404)
 
     def render_daily_log(request: Request, session: Session, day: date, today: date) -> Response:
@@ -873,5 +893,14 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
                 ),
             )
         )
+
+    @app.post("/api/captures", status_code=201)
+    def create_capture(body: NewCaptureIn, session: SessionDep) -> CaptureOut:
+        return _capture_out(persistence.add_capture(session, journal.capture(body.text)))
+
+    @app.get("/api/inbox")
+    def inbox(session: SessionDep) -> InboxOut:
+        captures = persistence.inbox(session)
+        return InboxOut(count=len(captures), captures=[_capture_out(c) for c in captures])
 
     return app

@@ -20,7 +20,8 @@ services:
     build: .
     environment:
       DATABASE_URL: postgresql+psycopg://dots:dots@db:5432/dots_and_dashes
-      JOURNAL_TIMEZONE: ${JOURNAL_TIMEZONE:-UTC}
+      SESSION_SECRET: ${SESSION_SECRET:-}
+      SECURE_COOKIES: ${SECURE_COOKIES:-}
       FLAG_MONTHLY_REVIEW: ${FLAG_MONTHLY_REVIEW:-}
     command: >-
       sh -c "alembic upgrade head &&

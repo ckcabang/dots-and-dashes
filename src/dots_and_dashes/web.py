@@ -12,7 +12,6 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
-from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -533,6 +532,14 @@ REFUSED_AS_INVALID: tuple[type[ValueError], ...] = (
 ENTRY_SAVES = {("POST", "/entries"), ("POST", "/api/entries")}
 
 
+def _pool_size(settings: Settings) -> dict[str, int]:
+    """With DB_POOL_SIZE set, the app holds at most that many connections;
+    unset, SQLAlchemy's own pool of 5 plus 10 overflow."""
+    if settings.db_pool_size is None:
+        return {}
+    return {"pool_size": settings.db_pool_size, "max_overflow": 0}
+
+
 def create_app(
     settings: Settings | None = None,
     clock: Clock = _system_clock,
@@ -543,8 +550,9 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        engine = create_engine(settings.database_url, pool_pre_ping=True)
-        telemetry.instrument_engine(engine)
+        engine = telemetry.create_engine(
+            settings.database_url, pool_pre_ping=True, **_pool_size(settings)
+        )
         app.state.sessionmaker = sessionmaker(engine)
         yield
         engine.dispose()

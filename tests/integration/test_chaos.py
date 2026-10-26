@@ -4,6 +4,7 @@ Injected save failures and latency must look, in the save metrics and
 traces, like the real incidents the alerts and runbooks are written for.
 """
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 
 import pytest
@@ -66,3 +67,52 @@ def test_injected_latency_slows_the_save_and_shows_in_its_duration(settings, sta
     (duration,) = signals.points()["entry.save.duration"]
     assert dict(duration.attributes) == {"outcome": "saved"}
     assert duration.sum >= 0.3
+
+
+def seconds(span) -> float:
+    return (span.end_time - span.start_time) / 1e9
+
+
+def test_the_pool_size_is_read_from_the_environment_and_a_save_traces_its_checkout(
+    settings, clock, logged_in, signals, monkeypatch
+):
+    monkeypatch.setenv("DATABASE_URL", settings.database_url)
+    monkeypatch.setenv("DB_POOL_SIZE", "3")
+    app = create_app(clock=clock, telemetry=signals.telemetry)
+
+    with logged_in(app) as client:
+        client.post("/api/entries", json={"text": "buy milk"})
+
+    request = signals.server_span("POST", "/api/entries")
+    (checkout, *_) = [
+        span
+        for span in signals.spans()
+        if span.name == "db.connection.checkout"
+        and span.parent is not None
+        and span.parent.span_id == request.context.span_id
+    ]
+    assert checkout.context.trace_id == request.context.trace_id
+    assert checkout.attributes and checkout.attributes["db.client.connection.max"] == 3
+
+
+def test_an_exhausted_pool_shows_as_a_long_connection_checkout(settings, start, signals):
+    # One connection, held for 300ms by each slow save: the second save waits.
+    with start(replace(settings, db_pool_size=1, chaos_save_latency_ms=300)) as client:
+        with ThreadPoolExecutor(2) as pool:
+            responses = list(
+                pool.map(
+                    lambda n: client.post("/api/entries", json={"text": f"entry {n}"}),
+                    range(2),
+                )
+            )
+
+    assert [response.status_code for response in responses] == [201, 201]
+    waits = [span for span in signals.spans() if span.name == "db.connection.checkout"]
+    longest = max(waits, key=seconds)
+    assert seconds(longest) >= 0.2
+    # It began with every connection in use.
+    assert longest.attributes and dict(longest.attributes) == {
+        "db.system.name": "postgresql",
+        "db.client.connection.max": 1,
+        "db.client.connection.used": 1,
+    }

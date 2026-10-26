@@ -27,6 +27,8 @@ class Settings:
     # the share of Entry saves to fail, 0 to 1, and how long to slow each one.
     chaos_save_error_rate: float = 0.0
     chaos_save_latency_ms: int = 0
+    # The most database connections the app holds; unset, SQLAlchemy's default.
+    db_pool_size: int | None = None
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -43,6 +45,7 @@ class Settings:
             release=os.environ.get("FLY_IMAGE_REF", "local"),
             chaos_save_error_rate=_rate("CHAOS_SAVE_ERROR_RATE"),
             chaos_save_latency_ms=_milliseconds("CHAOS_SAVE_LATENCY_MS"),
+            db_pool_size=_pool_size("DB_POOL_SIZE"),
             **({"session_secret": session_secret} if session_secret else {}),
         )
 
@@ -63,3 +66,11 @@ def _milliseconds(name: str) -> int:
     if milliseconds < 0:
         raise ValueError(f"{name} must not be negative, not {milliseconds}")
     return milliseconds
+
+
+def _pool_size(name: str) -> int | None:
+    if not (value := os.environ.get(name)):
+        return None
+    if (size := int(value)) < 1:
+        raise ValueError(f"{name} must be at least 1, not {size}")
+    return size

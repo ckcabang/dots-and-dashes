@@ -18,6 +18,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from dots_and_dashes import accounts, journal, persistence
 from dots_and_dashes.settings import Settings
+from dots_and_dashes.telemetry import RequestTelemetry, Telemetry
 
 Clock = Callable[[], datetime]
 
@@ -495,12 +496,23 @@ REFUSED_AS_INVALID: tuple[type[ValueError], ...] = (
 )
 
 
-def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -> FastAPI:
+# The key journey, logging an Entry on a Daily Log from the page or the API:
+# the requests the save metrics count and time.
+ENTRY_SAVES = {("POST", "/entries"), ("POST", "/api/entries")}
+
+
+def create_app(
+    settings: Settings | None = None,
+    clock: Clock = _system_clock,
+    telemetry: Telemetry | None = None,
+) -> FastAPI:
     settings = settings or Settings.from_env()
+    telemetry = telemetry or Telemetry.from_settings(settings)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         engine = create_engine(settings.database_url, pool_pre_ping=True)
+        telemetry.instrument_engine(engine)
         app.state.sessionmaker = sessionmaker(engine)
         yield
         engine.dispose()
@@ -516,6 +528,9 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
         same_site="lax",
         https_only=settings.secure_cookies,
     )
+    # Outermost, so its span covers every other middleware and the route.
+    app.add_middleware(RequestTelemetry, telemetry=telemetry, entry_saves=ENTRY_SAVES)
+    app.state.telemetry = telemetry
     app.mount("/static", StaticFiles(directory=PACKAGE_DIR / "static"), name="static")
 
     @app.exception_handler(LoginRequiredError)
@@ -617,7 +632,7 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
         day: Annotated[date | None, Form()] = None,
     ) -> Response:
         on = day or today
-        _add(session, journal.log_entry(text, on=on))
+        request.app.state.telemetry.entry_saved(_add(session, journal.log_entry(text, on=on)))
         if "HX-Request" in request.headers:
             # The whole Daily Log, since a Timed Entry may land anywhere in it.
             return _entries_fragment(request, session, on, status_code=201)
@@ -692,8 +707,12 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
         return Response(status_code=200)
 
     @app.post("/api/entries", status_code=201)
-    def create_entry(body: NewEntryIn, session: SessionDep, today: TodayDep) -> EntryOut:
-        return _out(_add(session, journal.log_entry(body.text, on=body.day or today)))
+    def create_entry(
+        request: Request, body: NewEntryIn, session: SessionDep, today: TodayDep
+    ) -> EntryOut:
+        entry = _add(session, journal.log_entry(body.text, on=body.day or today))
+        request.app.state.telemetry.entry_saved(entry)
+        return _out(entry)
 
     @app.post("/api/entries/{entry_id}/move")
     def move_entry(entry_id: int, body: MoveIn, session: SessionDep) -> DailyLogOut:

@@ -15,6 +15,10 @@ The judgement calls a reviewer enforces. Mechanical rules are checks in `make ch
 
 - **Glossary terms only**, in code, tests and test data. `CONTEXT.md` lists the term to use and the words to avoid; an avoided word as a name for the concept (`done` for Completed) is a violation, the same word in ordinary English (`aria-label`, Entry text like "draft") is not.
 
+## CI
+
+- **A CI change works under the workflow's own triggers**, not just in the diff. A pull request restores only caches saved by itself or its base branch, and a cancelled run saves nothing. The PR cites the run log line that shows it working ("Cache restored", the step's duration).
+
 ## Tests
 
 - Through the three seams in `docs/architecture/README.md` and the public interface only. A Journal function that only tests call is dead code the route rebuilt: production should call it.

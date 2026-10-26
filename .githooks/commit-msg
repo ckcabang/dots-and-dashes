@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# This repo's commits carry no AI attribution trailers.
+if grep -qiE '^Co-Authored-By: .*(claude|anthropic)' "$1"; then
+    echo "commit-msg: remove the Co-Authored-By trailer" >&2
+    exit 1
+fi

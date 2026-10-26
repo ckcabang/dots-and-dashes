@@ -6,8 +6,14 @@ through the active span, metrics through exemplars.
 Journal text never enters a signal. Spans, metrics and logs record an
 Entry's type, length and ID, and an error's type, never its message: a
 database error's message can quote the row it refused.
+
+The same holds for the process's stdout and stderr, which Fly keeps as the
+app's logs: a request that fails is answered here, with one line naming its
+error type and trace ID, so the server never logs the error's traceback.
 """
 
+import logging
+import sys
 import time
 from collections.abc import Collection
 from typing import Any
@@ -24,10 +30,11 @@ from opentelemetry.sdk.metrics.export import MetricReader, PeriodicExportingMetr
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter
-from opentelemetry.trace import Span, SpanKind, Status, StatusCode, use_span
+from opentelemetry.trace import Span, SpanKind, Status, StatusCode, format_trace_id, use_span
 from opentelemetry.util.re import parse_env_headers
 from sqlalchemy import Engine, create_engine, event
 from sqlalchemy.pool import PoolProxiedConnection, QueuePool
+from starlette.responses import PlainTextResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from dots_and_dashes import journal
@@ -208,6 +215,26 @@ def _traced_pool(tracer: trace.Tracer) -> type[QueuePool]:
 _SPANS = "dots_and_dashes.telemetry.spans"
 
 
+class _Stderr(logging.StreamHandler):
+    """Writes to sys.stderr as it is when a line is logged, not when built."""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.stream = sys.stderr
+        super().emit(record)
+
+
+# The app's own lines in its stderr, beside the server's: a failed request's
+# error type and trace ID, to find its trace and logs in Grafana.
+# Its own name, not the package's, so other modules' loggers don't inherit
+# this handler.
+_output = logging.getLogger(__name__)
+_output.propagate = False
+if not _output.handlers:
+    _handler = _Stderr()
+    _handler.setFormatter(logging.Formatter("%(levelname)s:    %(message)s"))
+    _output.addHandler(_handler)
+
+
 def _error_type(exc: BaseException) -> str:
     return f"{type(exc).__module__}.{type(exc).__qualname__}"
 
@@ -244,13 +271,14 @@ class RequestTelemetry:
             method, kind=SpanKind.SERVER, attributes={"http.request.method": method}
         )
         status = 500
+        responded = False
         error: Exception | None = None
         started = time.perf_counter()
 
         async def send_status(message: Message) -> None:
-            nonlocal status
+            nonlocal status, responded
             if message["type"] == "http.response.start":
-                status = message["status"]
+                status, responded = message["status"], True
             await send(message)
 
         with use_span(
@@ -259,19 +287,31 @@ class RequestTelemetry:
             try:
                 await self.app(scope, receive, send_status)
             except Exception as exc:
+                # Not raised on: the server would log its traceback, message and all.
                 status, error = 500, exc
                 _record_error(span, exc)
-                raise
-            finally:
-                route = getattr(scope.get("route"), "path", None)
-                if route:
-                    span.update_name(f"{method} {route}")
-                    span.set_attribute("http.route", route)
-                span.set_attribute("http.response.status_code", status)
-                if status >= 500:
-                    span.set_status(Status(StatusCode.ERROR))
-                if (method, route) in self.entry_saves:
-                    self._entry_save(status, time.perf_counter() - started, error)
+            route = getattr(scope.get("route"), "path", None)
+            if route:
+                span.update_name(f"{method} {route}")
+                span.set_attribute("http.route", route)
+            span.set_attribute("http.response.status_code", status)
+            if status >= 500:
+                span.set_status(Status(StatusCode.ERROR))
+            if (method, route) in self.entry_saves:
+                self._entry_save(status, time.perf_counter() - started, error)
+            if error is not None:
+                _output.error(
+                    "Request failed: %s %s error.type=%s trace_id=%s",
+                    method,
+                    route or "-",
+                    _error_type(error),
+                    format_trace_id(span.get_span_context().trace_id),
+                )
+                if not responded:
+                    # The response Starlette sends for an unhandled error.
+                    await PlainTextResponse("Internal Server Error", status_code=500)(
+                        scope, receive, send
+                    )
 
     def _entry_save(self, status: int, seconds: float, error: Exception | None) -> None:
         outcome = "failed" if status >= 500 else "refused" if status >= 400 else "saved"

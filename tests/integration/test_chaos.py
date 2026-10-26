@@ -23,6 +23,7 @@ def start(clock, logged_in, signals):
     return start_with
 
 
+@pytest.mark.failed_requests
 def test_an_injected_failure_fails_the_save_and_is_counted_as_failed(settings, start, signals):
     with start(replace(settings, chaos_save_error_rate=1.0)) as client:
         response = client.post("/api/entries", json={"text": "buy milk"})
@@ -39,6 +40,7 @@ def test_an_injected_failure_fails_the_save_and_is_counted_as_failed(settings, s
     assert failed.log_record.attributes and failed.log_record.attributes["error.type"] == error_type
 
 
+@pytest.mark.failed_requests
 def test_the_error_rate_is_read_from_the_environment_and_fails_that_share_of_saves(
     settings, clock, logged_in, signals, monkeypatch
 ):

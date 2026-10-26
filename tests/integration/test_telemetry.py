@@ -5,9 +5,19 @@ place of Grafana Cloud, so a test can read every span, metric and log the
 journey produced.
 """
 
-from dataclasses import replace
+import copy
+import logging
+import socket
+import sys
+import threading
+import time
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass, replace
 
+import httpx2
 import pytest
+import uvicorn
 from sqlalchemy import create_engine, text
 
 from dots_and_dashes.web import create_app
@@ -132,6 +142,7 @@ def entries_refuse_writes(database_url):
     engine.dispose()
 
 
+@pytest.mark.failed_requests
 def test_a_failed_save_is_counted_traced_and_logged(client, signals, entries_refuse_writes):
     response = client.post("/api/entries", json={"text": "buy milk"})
 
@@ -153,6 +164,7 @@ def test_a_failed_save_is_counted_traced_and_logged(client, signals, entries_ref
 SECRET = "meet Alex at the hidden cafe"
 
 
+@pytest.mark.failed_requests
 def test_entry_text_never_enters_a_signal_even_when_a_save_fails(
     client, signals, entries_refuse_writes
 ):
@@ -182,3 +194,145 @@ def test_saved_entry_and_capture_text_never_enters_a_signal(client, signals):
     assert '"entry.type": "note"' in recorded
     assert f'"entry.text_length": {len(SECRET)}' in recorded
     assert f'"entry.id": {entry["id"]}' in recorded
+
+
+# A failure's output as Fly sees it: the app served by uvicorn, the way the
+# Dockerfile runs it, whose stdout and stderr become the app's logs.
+
+
+@dataclass
+class Served:
+    client: httpx2.Client
+    server: uvicorn.Server
+    thread: threading.Thread
+    capture: pytest.CaptureFixture[str]
+
+    def stop(self) -> None:
+        self.server.should_exit = True
+        self.thread.join()
+
+    def output(self) -> str:
+        """Everything the server wrote to stdout and stderr, once it has
+        stopped: uvicorn logs an error's traceback after the response is sent."""
+        self.stop()
+        out, err = self.capture.readouterr()
+        return out + err
+
+
+class _CurrentStream(logging.StreamHandler):
+    """Writes to sys.stdout or sys.stderr as it is when a line is logged, so
+    to the streams capfd is capturing, not those of the test that set it up."""
+
+    def __init__(self, to: str) -> None:
+        super().__init__()
+        self.to = to
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.stream = getattr(sys, self.to)
+        super().emit(record)
+
+
+def _uvicorn_logging() -> dict:
+    """Uvicorn's own logging config, its streams looked up as each line is logged."""
+    config = copy.deepcopy(uvicorn.config.LOGGING_CONFIG)
+    for handler in config["handlers"].values():
+        assert handler.pop("class") == "logging.StreamHandler"
+        handler["()"] = _CurrentStream
+        handler["to"] = handler.pop("stream").removeprefix("ext://sys.")
+    return config
+
+
+@pytest.fixture
+def served(settings, clock, user, password, signals, capfd) -> Iterator[Served]:
+    app = create_app(settings, clock=clock, telemetry=signals.telemetry)
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    server = uvicorn.Server(uvicorn.Config(app, log_config=_uvicorn_logging()))
+    thread = threading.Thread(target=server.run, kwargs={"sockets": [sock]})
+    thread.start()
+    try:
+        while not server.started:
+            assert thread.is_alive(), "uvicorn failed to start"
+            time.sleep(0.01)
+        host, port = sock.getsockname()
+        with httpx2.Client(base_url=f"http://{host}:{port}") as client:
+            response = client.post("/login", data={"email": user, "password": password})
+            assert response.status_code == 303, response.text
+            yield Served(client, server, thread, capfd)
+    finally:
+        server.should_exit = True
+        thread.join()
+        sock.close()
+
+
+@pytest.fixture
+def journal_refuses_writes(database_url):
+    """While in use, Postgres refuses every new Entry and Capture."""
+    engine = create_engine(database_url)
+    tables = ("entries", "captures")
+
+    @contextmanager
+    def refusing():
+        with engine.begin() as conn:
+            for table in tables:
+                conn.execute(
+                    text(f"ALTER TABLE {table} ADD CONSTRAINT refuse_all CHECK (false) NOT VALID")
+                )
+        try:
+            yield
+        finally:
+            with engine.begin() as conn:
+                for table in tables:
+                    conn.execute(text(f"ALTER TABLE {table} DROP CONSTRAINT refuse_all"))
+
+    yield refusing
+    engine.dispose()
+
+
+# Each save that writes journal text, by its route and request.
+FAILED_SAVES: dict[str, tuple[str, Callable[[], dict]]] = {
+    "entry-api": ("/api/entries", lambda: {"json": {"text": f"{SECRET} 1"}}),
+    "entry-page": (
+        "/entries",
+        lambda: {"data": {"text": f"{SECRET} 2"}, "headers": {"HX-Request": "true"}},
+    ),
+    "capture-api": ("/api/captures", lambda: {"json": {"text": f"{SECRET} 3"}}),
+    "capture-page": ("/capture", lambda: {"data": {"text": f"{SECRET} 4"}}),
+    "triage-api": (
+        "/api/captures/{capture_id}/triage",
+        lambda: {"json": {"to": "day", "text": f"{SECRET} 5"}},
+    ),
+    "triage-page": ("/inbox/{capture_id}/triage", lambda: {"data": {"to": "day"}}),
+}
+
+
+@pytest.mark.failed_requests
+@pytest.mark.parametrize(("route", "request_args"), FAILED_SAVES.values(), ids=FAILED_SAVES)
+def test_a_failed_save_logs_its_error_type_and_trace_but_no_journal_text(
+    served, signals, journal_refuses_writes, route, request_args
+):
+    # The Capture a Triage places: its text is in the failing row too.
+    capture = served.client.post("/api/captures", json={"text": f"{SECRET} 6"}).json()
+    path = route.format(capture_id=capture["id"])
+
+    with journal_refuses_writes():
+        response = served.client.post(path, **request_args())
+
+    # The response the User got before: Starlette's own.
+    assert (response.status_code, response.text) == (500, "Internal Server Error")
+    assert response.headers["content-type"].startswith("text/plain")
+    logs = served.output()
+    # Postgres quotes the failing row, text and all, in its error.
+    assert "Alex" not in logs
+    (span,) = [
+        s
+        for s in signals.spans()
+        if s.attributes
+        and s.attributes.get("http.route") == route
+        and s.attributes.get("http.response.status_code") == 500
+    ]
+    trace_id = format(span.context.trace_id, "032x")
+    (failed,) = [line for line in logs.splitlines() if trace_id in line]
+    assert "error.type=sqlalchemy.exc.IntegrityError" in failed
+    # Uvicorn's access log, unchanged: method, path and status, never the body.
+    assert f'"POST {path} HTTP/1.1" 500' in logs

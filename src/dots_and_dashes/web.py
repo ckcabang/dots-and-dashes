@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from starlette.middleware.sessions import SessionMiddleware
 
 from dots_and_dashes import accounts, journal, persistence
+from dots_and_dashes.chaos import SaveChaos
 from dots_and_dashes.settings import Settings
 from dots_and_dashes.telemetry import RequestTelemetry, Telemetry
 
@@ -319,6 +320,15 @@ def _today(request: Request, user: UserDep) -> date:
 # Scoped to the function so its writes commit before the response is sent;
 # the default scope would commit after, racing the browser's next request.
 SessionDep = Annotated[Session, Depends(_session, scope="function")]
+
+
+def _save_chaos(request: Request, session: SessionDep) -> None:
+    """With the chaos switch on, fail or slow this Entry save. It holds its
+    database connection meanwhile, the way a struggling database would."""
+    chaos: SaveChaos = request.app.state.save_chaos
+    if chaos.on:
+        session.connection()
+        chaos.save()
 TodayDep = Annotated[date, Depends(_today)]
 MonthDep = Annotated[date, Depends(_month_param)]
 
@@ -542,6 +552,7 @@ def create_app(
     app = FastAPI(title="Dots & Dashes", lifespan=lifespan)
     app.state.settings = settings
     app.state.clock = clock
+    app.state.save_chaos = SaveChaos.from_settings(settings)
     app.add_middleware(
         SessionMiddleware,
         secret_key=settings.session_secret,
@@ -645,7 +656,7 @@ def create_app(
     ) -> Response:
         return render_daily_log(request, session, day, today)
 
-    @app.post("/entries")
+    @app.post("/entries", dependencies=[Depends(_save_chaos)])
     def quick_entry(
         request: Request,
         text: Annotated[str, Form()],
@@ -728,7 +739,7 @@ def create_app(
         # HTMX swaps the Entry's line for this empty body.
         return Response(status_code=200)
 
-    @app.post("/api/entries", status_code=201)
+    @app.post("/api/entries", status_code=201, dependencies=[Depends(_save_chaos)])
     def create_entry(
         request: Request, body: NewEntryIn, session: SessionDep, today: TodayDep
     ) -> EntryOut:

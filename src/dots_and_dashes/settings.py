@@ -23,6 +23,10 @@ class Settings:
     service_name: str = "dots-and-dashes"
     environment: str = "local"  # dev or prod, to tell their telemetry apart
     release: str = "local"  # the deployed image, to tie errors to a release
+    # The chaos switch, for staging an incident on dev (docs/runbooks):
+    # the share of Entry saves to fail, 0 to 1, and how long to slow each one.
+    chaos_save_error_rate: float = 0.0
+    chaos_save_latency_ms: int = 0
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -37,9 +41,25 @@ class Settings:
             environment=os.environ.get("DEPLOYMENT_ENVIRONMENT", "local"),
             # Fly sets FLY_IMAGE_REF on every Machine to the image it runs.
             release=os.environ.get("FLY_IMAGE_REF", "local"),
+            chaos_save_error_rate=_rate("CHAOS_SAVE_ERROR_RATE"),
+            chaos_save_latency_ms=_milliseconds("CHAOS_SAVE_LATENCY_MS"),
             **({"session_secret": session_secret} if session_secret else {}),
         )
 
 
 def _flag(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _rate(name: str) -> float:
+    rate = float(os.environ.get(name) or 0)
+    if not 0 <= rate <= 1:
+        raise ValueError(f"{name} must be between 0 and 1, not {rate}")
+    return rate
+
+
+def _milliseconds(name: str) -> int:
+    milliseconds = int(os.environ.get(name) or 0)
+    if milliseconds < 0:
+        raise ValueError(f"{name} must not be negative, not {milliseconds}")
+    return milliseconds

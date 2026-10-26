@@ -122,6 +122,22 @@ class FutureLogOut(BaseModel):
     months: list[FutureMonthOut]
 
 
+class AnchorGroupOut(BaseModel):
+    anchor: EntryOut | None
+    tasks: list[EntryOut]
+
+
+class MigrationDayOut(BaseModel):
+    date: date
+    groups: list[AnchorGroupOut]
+
+
+class DailyMigrationOut(BaseModel):
+    planning: date
+    night_before: bool
+    days: list[MigrationDayOut]
+
+
 def _parse_month(value: str) -> date:
     """Read a month written YYYY-MM as the date of its first day."""
     try:
@@ -203,6 +219,18 @@ def _migrate(
     for note in journal.move_nested_notes(persistence.nested_notes(session, task.id), to=copy):
         persistence.save_entry(session, note)
     return persistence.get_entry(session, task.id), copy
+
+
+def _daily_migration(
+    request: Request, session: Session
+) -> tuple[date, bool, list[journal.MigrationDay]]:
+    """The day a Daily Migration run now plans, whether it is the night before,
+    and the Open Tasks it reviews. Opening it writes nothing, so it can be skipped."""
+    state = request.app.state
+    now, timezone = state.clock(), state.settings.timezone
+    night_before = journal.is_night_before(now, timezone)
+    planning = journal.day_being_planned(now, timezone, night_before=night_before)
+    return planning, night_before, persistence.daily_migration(session, planning)
 
 
 def _move_event(session: Session, entry_id: int, on: date) -> journal.Entry:
@@ -543,6 +571,41 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
             persistence.add_entry(
                 session, journal.log_month_entry(body.text, month=month, today=today)
             )
+        )
+
+    @app.get("/migration", response_class=HTMLResponse)
+    def daily_migration_page(request: Request, session: SessionDep, today: TodayDep) -> Response:
+        planning, night_before, review = _daily_migration(request, session)
+        return templates.TemplateResponse(
+            request,
+            "daily_migration.html",
+            {
+                "today": today,
+                "planning": planning,
+                "night_before": night_before,
+                "review": review,
+            },
+        )
+
+    @app.get("/api/daily-migration")
+    def daily_migration(request: Request, session: SessionDep) -> DailyMigrationOut:
+        planning, night_before, review = _daily_migration(request, session)
+        return DailyMigrationOut(
+            planning=planning,
+            night_before=night_before,
+            days=[
+                MigrationDayOut(
+                    date=day.day,
+                    groups=[
+                        AnchorGroupOut(
+                            anchor=_out(group.anchor) if group.anchor else None,
+                            tasks=[_out(task) for task in group.tasks],
+                        )
+                        for group in day.groups
+                    ],
+                )
+                for day in review
+            ],
         )
 
     @app.get("/future", response_class=HTMLResponse)

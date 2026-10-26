@@ -263,3 +263,24 @@ def delete_entry(session: Session, entry_id: int) -> None:
     """Delete an Entry permanently."""
     session.delete(_row(session, entry_id))
     session.flush()
+
+
+def daily_migration(session: Session, planning: date) -> list[journal.MigrationDay]:
+    """The Daily Migration for a day being planned. It only reads."""
+    days = (
+        select(EntryRow.day)
+        .where(
+            EntryRow.location == journal.Location.DAY,
+            EntryRow.type == journal.EntryType.TASK,
+            EntryRow.state == journal.TaskState.OPEN,
+            EntryRow.day < planning,
+        )
+        .distinct()
+    )
+    # Whole Daily Logs, in manual order, so each Open Task's Anchor is found.
+    rows = session.scalars(
+        select(EntryRow)
+        .where(EntryRow.location == journal.Location.DAY, EntryRow.day.in_(days))
+        .order_by(EntryRow.day, EntryRow.position, EntryRow.id)
+    )
+    return journal.daily_migration(_loaded(session, rows), planning=planning)

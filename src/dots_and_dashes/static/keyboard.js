@@ -10,8 +10,9 @@
 //   Tab  nest a Note under the Task or Event above it    Shift+Tab  un-nest it
 //   Delete / Backspace  delete for good, after confirming
 //   m  Migrate a Task to the day being planned: today, or tomorrow (the night
-//      before) if it is already on today's Daily Log
-//   M  Migrate a Task to this month's task list
+//      before) if it is already on today's Daily Log; in Daily Migration, the
+//      day the page says it plans
+//   M  Migrate a Task to the planned day's month's task list
 //   s  Schedule a Task: asks for a date (YYYY-MM-DD) or a month (YYYY-MM)
 //   Alt+ArrowUp / Alt+ArrowDown  reorder an untimed Entry (it re-Anchors)
 // Untimed Entries can also be dragged. Timed Entries move only by changing
@@ -53,9 +54,13 @@
   }
 
   // Migrating moves the Task's Nested Notes away, and its copy may land on
-  // this page, so every list on the page is redrawn afterwards.
+  // this page, so every list on the page is redrawn afterwards. A list the
+  // fresh page no longer has is emptied. If the Task itself left the page, as
+  // it does in Daily Migration, the selection moves on to the next Entry.
   async function migrate(entry, values) {
     const id = entry.dataset.id;
+    const list = entries();
+    const following = list.slice(list.indexOf(entry) + 1).map((e) => e.dataset.id);
     const migrated = await fetch(`/entries/${id}/migrate`, {
       method: "POST",
       body: new URLSearchParams(values),
@@ -68,9 +73,10 @@
     const fresh = new DOMParser().parseFromString(await page.text(), "text/html");
     for (const list of document.querySelectorAll(".entries[id]")) {
       const redrawn = fresh.getElementById(list.id);
-      if (redrawn) list.replaceChildren(...redrawn.children);
+      list.replaceChildren(...(redrawn ? redrawn.children : []));
     }
-    byId(id)?.focus();
+    const next = [id, ...following].map(byId).find(Boolean) || entries().at(-1);
+    next?.focus();
   }
 
   const today = () => document.body.dataset.today;
@@ -80,7 +86,15 @@
     return next.toISOString().slice(0, 10);
   };
 
+  // Daily Migration names the day it plans, decided by the server's clock.
+  const plan = () => document.querySelector("[data-planning]")?.dataset;
+
   function migrateToPlannedDay(entry) {
+    const planned = plan();
+    if (planned) {
+      migrate(entry, { to: "day", date: planned.planning, night_before: planned.nightBefore });
+      return;
+    }
     const day = entry.dataset.day;
     if (day && day >= today()) {
       migrate(entry, { to: "day", date: dayAfter(today()), night_before: "true" });
@@ -91,8 +105,9 @@
 
   function schedule(entry) {
     const when = prompt("Schedule to a date (YYYY-MM-DD) or a month (YYYY-MM):")?.trim();
-    if (/^\d{4}-\d{2}$/.test(when)) migrate(entry, { to: "future", month: when });
-    else if (/^\d{4}-\d{2}-\d{2}$/.test(when)) migrate(entry, { to: "date", date: when });
+    const night_before = plan()?.nightBefore || "false";
+    if (/^\d{4}-\d{2}$/.test(when)) migrate(entry, { to: "future", month: when, night_before });
+    else if (/^\d{4}-\d{2}-\d{2}$/.test(when)) migrate(entry, { to: "date", date: when, night_before });
     else entry.focus();
   }
 
@@ -210,7 +225,11 @@
     Delete: remove,
     Backspace: remove,
     m: migrateToPlannedDay,
-    M: (entry) => migrate(entry, { to: "month", month: today().slice(0, 7) }),
+    M: (entry) => {
+      const planned = plan();
+      const month = (planned?.planning || today()).slice(0, 7);
+      migrate(entry, { to: "month", month, night_before: planned?.nightBefore || "false" });
+    },
     s: schedule,
   };
 
@@ -243,8 +262,9 @@
   });
 
   // The autofocus attribute is not always honoured, so make sure typing
-  // starts in the quick-entry box when nothing else has focus.
+  // starts in the quick-entry box when nothing else has focus. A page with no
+  // box, like Daily Migration, starts with its first Entry selected.
   document.addEventListener("DOMContentLoaded", () => {
-    if (document.activeElement === document.body) quickEntry()?.focus();
+    if (document.activeElement === document.body) (quickEntry() || entries()[0])?.focus();
   });
 })();

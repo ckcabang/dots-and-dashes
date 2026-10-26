@@ -8,6 +8,7 @@ The judgement calls a reviewer enforces. Mechanical rules are checks in `make ch
 - **Clients send intent, never decisions.** `keyboard.js` and API callers say what the User asked for ("migrate this Task", "plan tomorrow"); the server asks the Journal what that means. A request field like `night_before` that lets the caller decide the outcome is a violation.
 - **Routes are thin**: parse the request, call the Journal, persist what it returns, render. Branching on domain state in `web.py` is a rule that belongs in the Journal.
 - **Persistence stores what the Journal decided.** Ordering, re-linking and un-nesting rules in `persistence.py` or the schema are violations; a foreign key may stay as a safety net under a Journal rule.
+- **Flagged features stay behind their flag.** A Journal function changed for a flagged feature must not change what an unflagged route does; give the flagged path its own function. With the flag off, the app behaves exactly as before.
 - **Templates render, they don't decide.** A template condition that restates a Journal rule should call a Journal predicate instead.
 
 ## Names

@@ -15,7 +15,7 @@ Rules belong in the Journal. If a route or a query starts deciding domain behavi
 
 Exactly three, each testing behaviour through a public interface:
 
-1. **Journal (unit, `tests/unit`)**: domain rules with an injected clock and timezone, no I/O.
+1. **Journal (unit, `tests/unit`)**: domain rules with an injected clock and timezone, no I/O. `tests/unit/test_templates.py` beside them is a build check, not a seam: every template compiles.
 2. **HTTP API (integration, `tests/integration`)**: the app in-process against a real Postgres.
 3. **Browser (`tests/browser`)**: Playwright driving the app container for the key journeys.
 

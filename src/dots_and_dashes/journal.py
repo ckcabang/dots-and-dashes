@@ -1,7 +1,7 @@
 """The Journal domain module: every bullet journal rule, with no I/O."""
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, time, tzinfo
 from enum import StrEnum
 
@@ -18,6 +18,10 @@ class TaskState(StrEnum):
 
 class BlankEntryError(ValueError):
     """Raised when there is no text to log."""
+
+
+class NestingError(ValueError):
+    """Raised when an Entry can't be nested where it was asked to be."""
 
 
 @dataclass(frozen=True)
@@ -103,6 +107,8 @@ class Entry:
     time: time | None
     text: str
     day: date
+    # A Nested Note's parent: the Task or Event it is attached to.
+    parent_id: int | None = None
 
 
 def log_entry(text: str, *, on: date) -> NewEntry:
@@ -140,6 +146,38 @@ def daily_log_order(entries: list[Entry]) -> list[Entry]:
     # sorted() is stable, so Anchors at the same time keep their logged order.
     anchored = sorted(anchored, key=lambda group: group[0].time or time.min)
     return top + [entry for group in anchored for entry in group]
+
+
+def arrange_daily_log(entries: list[Entry]) -> list[Entry]:
+    """Lay out a Daily Log's Entries, given in the order they were logged.
+
+    Entries that aren't Nested Notes follow the Daily Log ordering; each
+    Nested Note sits under its parent, in the order it was logged, so it
+    moves wherever its parent goes.
+    """
+    nested: dict[int, list[Entry]] = {}
+    for entry in entries:
+        if entry.parent_id is not None:
+            nested.setdefault(entry.parent_id, []).append(entry)
+    ordered = daily_log_order([entry for entry in entries if entry.parent_id is None])
+    return [shown for entry in ordered for shown in [entry, *nested.get(entry.id, [])]]
+
+
+def nest_note(note: Entry, daily_log: list[Entry]) -> Entry:
+    """Nest a Note under the Task or Event above it on its Daily Log, given in display order."""
+    if note.type is not EntryType.NOTE:
+        raise NestingError("only Notes can be nested")
+    # Nested Notes sit right under their parent, so the nearest Entry above
+    # that isn't one is the Note's parent-to-be.
+    above = [entry for entry in daily_log[: daily_log.index(note)] if entry.parent_id is None]
+    if not above or above[-1].type not in (EntryType.TASK, EntryType.EVENT):
+        raise NestingError("a Note nests only under the Task or Event above it")
+    return replace(note, parent_id=above[-1].id)
+
+
+def un_nest_note(note: Entry) -> Entry:
+    """Detach a Nested Note from its parent so it stands alone again."""
+    return replace(note, parent_id=None)
 
 
 def today(now: datetime, timezone: tzinfo) -> date:

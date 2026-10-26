@@ -20,10 +20,29 @@
 </form>
 
 <ul id="entries" class="entries">
-  {% for entry in entries %}{% include "_entry.html" %}{% endfor %}
+  {% include "_entries.html" %}
 </ul>
 
 <script>
+  // Nesting keys for the selected Entry: Tab nests a Note under the Task or
+  // Event above it, Shift+Tab un-nests it. The server re-renders the Daily
+  // Log, then the same Entry is selected again.
+  (() => {
+    const entries = document.getElementById("entries");
+    const nestingAction = (event) =>
+      event.key !== "Tab" ? null : event.shiftKey ? "un-nest" : "nest";
+
+    entries.addEventListener("keydown", (event) => {
+      const action = nestingAction(event);
+      const entry = event.target.closest(".entry");
+      if (!action || !entry) return;
+      event.preventDefault();
+      const id = entry.dataset.entryId;
+      htmx.ajax("POST", `/entries/${id}/${action}`, { target: entries, swap: "innerHTML" })
+        .then(() => entries.querySelector(`[data-entry-id="${id}"]`)?.focus());
+    });
+  })();
+
   // [ and ] go to the previous and next day. They are shortcuts only outside
   // text fields, so they can still be typed into an Entry; Escape leaves one.
   document.addEventListener("keydown", (event) => {

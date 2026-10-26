@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+
+{% block title %}Monthly Review · Dots & Dashes{% endblock %}
+
+{% block content %}
+<nav class="day-nav" aria-label="Logs">
+  <a href="/">← Today</a>
+  <a href="/months/{{ review.month.strftime('%Y-%m') }}">{{ review.month.strftime("%B") }}'s Monthly Log</a>
+</nav>
+
+<main id="monthly-review">
+  <h1>Monthly Review: <time datetime="{{ review.month.strftime('%Y-%m') }}">{{ review.month.strftime("%B %Y") }}</time></h1>
+
+  <section aria-labelledby="leftovers-heading">
+    <h2 id="leftovers-heading">{{ last_month.strftime("%B") }}'s Open Tasks</h2>
+    <p>
+      <kbd>x</kbd> complete, <kbd>m</kbd> migrate to the day being planned,
+      <kbd>M</kbd> migrate to {{ review.month.strftime("%B") }}'s task list,
+      <kbd>s</kbd> schedule, <kbd>c</kbd> cancel.
+    </p>
+    {% if review.task_list %}
+    <h3 id="task-list-heading"><a href="/months/{{ last_month.strftime('%Y-%m') }}">{{ last_month.strftime("%B") }}'s task list</a></h3>
+    <ul id="entries-task-list" class="entries" aria-labelledby="task-list-heading">
+      {% for entry in review.task_list %}{% include "_entry.html" %}{% endfor %}
+    </ul>
+    {% endif %}
+    {% for leftover in review.days %}
+    <h3 id="day-{{ leftover.day.isoformat() }}"><a href="/days/{{ leftover.day.isoformat() }}"><time datetime="{{ leftover.day.isoformat() }}">{{ leftover.day.strftime("%A, %-d %B") }}</time></a></h3>
+    <ul id="entries-{{ leftover.day.isoformat() }}" class="entries" aria-labelledby="day-{{ leftover.day.isoformat() }}">
+      {% for entry in leftover.tasks %}{% include "_entry.html" %}{% endfor %}
+    </ul>
+    {% endfor %}
+    {% if not review.task_list and not review.days %}
+    <p>No Open Tasks left from {{ last_month.strftime("%B") }}.</p>
+    {% endif %}
+  </section>
+
+  <section aria-labelledby="future-log-heading">
+    <h2 id="future-log-heading">{{ review.month.strftime("%B") }} in the Future Log</h2>
+    {% if review.to_pull %}
+    <ul id="entries-to-pull" class="entries">
+      {% for entry in review.to_pull %}{% include "_entry.html" %}{% endfor %}
+    </ul>
+    <form method="post" action="/monthly-review/pull">
+      <button id="pull" aria-keyshortcuts="f">Pull into {{ review.month.strftime("%B") }}</button> (<kbd>f</kbd>):
+      dated Entries go on their day, the rest on the task list.
+    </form>
+    {% elif not review.needs_a_date %}
+    <p>Nothing left to pull from the Future Log.</p>
+    {% endif %}
+    {% if review.needs_a_date %}
+    <h3>Events waiting for a date</h3>
+    <ul id="entries-needs-a-date" class="entries">
+      {% for entry in review.needs_a_date %}{% include "_entry.html" %}{% endfor %}
+    </ul>
+    {% for event in review.needs_a_date if not event.parent_id %}
+    <form method="post" action="/monthly-review/entries/{{ event.id }}/date">
+      <input type="date" name="date" aria-label="Date for {{ event.text }}"
+             min="{{ review.month.isoformat() }}" max="{{ last_day.isoformat() }}" required>
+      <button>Move {{ event.text }} onto its day</button>
+    </form>
+    {% endfor %}
+    {% endif %}
+  </section>
+</main>
+
+<script>
+  // f pulls this month's Future Log in.
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "f" || event.ctrlKey || event.metaKey || event.altKey) return;
+    if (event.target.closest("input, textarea, select, [contenteditable]")) return;
+    const pull = document.getElementById("pull");
+    if (!pull) return;
+    event.preventDefault();
+    pull.click();
+  });
+</script>
+{% endblock %}

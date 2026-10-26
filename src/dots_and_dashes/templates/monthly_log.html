@@ -6,6 +6,7 @@
 <nav class="day-nav" aria-label="Months">
   <a href="/months/{{ previous_month.strftime('%Y-%m') }}">← Previous month</a>
   <a href="/future">Future Log</a>
+  {% if monthly_review %}<a href="/monthly-review">Monthly Review</a>{% endif %}
   {% if next_month %}<a href="/months/{{ next_month.strftime('%Y-%m') }}">Next month →</a>{% else %}<span></span>{% endif %}
 </nav>
 

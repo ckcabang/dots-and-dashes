@@ -576,16 +576,17 @@ def future_log(entries: list[Entry], *, today: date) -> list[FutureMonth]:
         ):
             by_month.setdefault(entry.month, []).append(entry)
     return [
-        FutureMonth(
-            month=month,
-            entries=_with_nested_notes(
-                by_month[month],
-                # Called right away, inside this iteration, so `month` is the current one.
-                lambda entries: sorted(entries, key=lambda e: (e.day is None, e.day or month)),  # noqa: B023
-            ),
-        )
+        FutureMonth(month=month, entries=_in_future_log_order(by_month[month], month))
         for month in sorted(by_month)
     ]
+
+
+def _in_future_log_order(entries: list[Entry], month: date) -> list[Entry]:
+    """A Future Log month's Entries: dated ones first, in date order, each with
+    its Nested Notes under it."""
+    return _with_nested_notes(
+        entries, lambda unnested: sorted(unnested, key=lambda e: (e.day is None, e.day or month))
+    )
 
 
 def daily_log_day(entry: Entry) -> date:
@@ -693,7 +694,12 @@ def migrate(task: Entry, *, to: Destination, planning: date) -> Migration:
     ):
         raise MigrationError("a Task cannot move back to an earlier day")
     state = _marker_for(to, planning=planning)
-    copy = NewEntry(
+    return Migration(original=replace(task, state=state), copy=_open_copy(task, to=to))
+
+
+def _open_copy(task: Entry, *, to: Destination) -> NewEntry:
+    """A Task's new Open copy at a destination, keeping its text, Signifiers and time."""
+    return NewEntry(
         type=task.type,
         state=TaskState.OPEN,
         priority=task.priority,
@@ -705,7 +711,6 @@ def migrate(task: Entry, *, to: Destination, planning: date) -> Migration:
         month=to.month,
         migrated_from_id=task.id,
     )
-    return Migration(original=replace(task, state=state), copy=copy)
 
 
 def _marker_for(to: Destination, *, planning: date) -> TaskState:
@@ -782,14 +787,17 @@ def delete_entry(
 
 
 def move_event(event: Entry, nested_notes: list[Entry], *, on: date) -> tuple[Entry, list[Entry]]:
-    """Move an Event on a Daily Log to another day, with its Nested Notes.
+    """Move an Event to a day's Daily Log, with its Nested Notes.
 
     An Event just changes its date: it leaves no marker and no Migration Chain.
+    One in the Future Log, dated or not, leaves it for that Daily Log.
     """
     if event.type is not EntryType.EVENT:
         raise MigrationError("only an Event moves by changing its date")
-    daily_log_day(event)
-    return replace(event, day=on), [replace(note, day=on) for note in nested_notes]
+    def moved(entry: Entry) -> Entry:
+        return replace(entry, location=Location.DAY, day=on, month=None)
+
+    return moved(event), [moved(note) for note in nested_notes]
 
 
 # Daily Migration: reviewing the Open Tasks left on earlier days, to complete,
@@ -843,3 +851,133 @@ def daily_migration(entries: list[Entry], *, planning: date) -> list[MigrationDa
         if groups:
             review.append(MigrationDay(day=day, groups=groups))
     return review
+
+
+# Monthly Review: the ritual on the first of the month, dealing with last
+# month's leftover Open Tasks and pulling this month's Future Log Entries into
+# the new Monthly Log. Like Daily Migration it is about the User's current
+# month, so it still works when opened after the first.
+
+
+@dataclass(frozen=True)
+class LeftoverDay:
+    """A Daily Log of last month and its Open Tasks, in Daily Log order."""
+
+    day: date
+    tasks: list[Entry]
+
+
+@dataclass(frozen=True)
+class MonthlyReview:
+    """The month being set up, and last month's Open Tasks still to decide."""
+
+    month: date
+    task_list: list[Entry]  # left on last month's task list
+    days: list[LeftoverDay]  # left on last month's Daily Logs, oldest day first
+    # This month's Future Log Entries, in Future Log order: those the pull
+    # brings in, and the undated Events it can't, which wait for a date.
+    to_pull: list[Entry]
+    needs_a_date: list[Entry]
+
+
+def monthly_review(entries: list[Entry], *, today: date) -> MonthlyReview:
+    """The Monthly Review of the User's current month.
+
+    Entries are given in each Daily Log's manual order, and the task list's
+    and Future Log's in the order they were logged. Each leftover is
+    completed, migrated, scheduled or cancelled like any Open Task, which
+    takes it off the review.
+    """
+    month = month_of(today)
+    waiting = _waiting_in_future_log(entries, month)
+    last_month = previous_month(month)
+    task_list: list[Entry] = []
+    by_day: dict[date, list[Entry]] = {}
+    for entry in entries:
+        if entry.location is Location.MONTH and entry.month == last_month:
+            task_list.append(entry)
+        elif (
+            entry.location is Location.DAY
+            and entry.day is not None
+            and month_of(entry.day) == last_month
+        ):
+            by_day.setdefault(entry.day, []).append(entry)
+    days = [
+        LeftoverDay(day=day, tasks=tasks)
+        for day in sorted(by_day)
+        if (tasks := [e for e in arrange_daily_log(by_day[day]) if _is_open_task(e)])
+    ]
+    return MonthlyReview(
+        month=month,
+        task_list=[e for e in arrange_task_list(task_list) if _is_open_task(e)],
+        days=days,
+        to_pull=[e for e in waiting if not _needs_a_date(e, waiting)],
+        needs_a_date=[e for e in waiting if _needs_a_date(e, waiting)],
+    )
+
+
+def _waiting_in_future_log(entries: list[Entry], month: date) -> list[Entry]:
+    """A month's Future Log Entries not yet pulled into its Monthly Log, in
+    Future Log order: Open Tasks, Events and Notes, with their Nested Notes.
+    Decided Tasks stay behind."""
+    waiting = [
+        entry
+        for entry in entries
+        if entry.location is Location.FUTURE
+        and entry.month == month
+        and (entry.type is not EntryType.TASK or entry.state is TaskState.OPEN)
+    ]
+    return _in_future_log_order(waiting, month)
+
+
+def _needs_a_date(entry: Entry, waiting: list[Entry]) -> bool:
+    """Whether a waiting Entry is, or is nested under, an undated Event: an
+    Event belongs on a day, so the pull leaves it until it is given one."""
+    if entry.parent_id is not None:
+        entry = _find(waiting, entry.parent_id)
+    return entry.type is EntryType.EVENT and entry.day is None
+
+
+@dataclass(frozen=True)
+class Pull:
+    """This month's Future Log brought into its Monthly Log.
+
+    Tasks are copied (ADR-0001), each original marked Migrated; their Nested
+    Notes move onto the copy with move_nested_notes once it is stored. Events
+    and Notes have no Task State, so they move, Nested Notes and all.
+    """
+
+    migrations: list[Migration]
+    moved: list[Entry]
+
+
+def pull_from_future_log(entries: list[Entry], *, today: date) -> Pull:
+    """Pull the User's current month's Future Log Entries into its Monthly Log.
+
+    A dated Entry lands on its day's Daily Log and an undated one on the
+    month's task list, except an undated Event, which waits for a date. A Task
+    dated a day already past this month, when the review is opened after the
+    first, lands on the task list instead. Pulled Entries leave the Future
+    Log, so pulling again brings in nothing more.
+    """
+    month = month_of(today)
+    waiting = _waiting_in_future_log(entries, month)
+    migrations: list[Migration] = []
+    moved: list[Entry] = []
+    for entry in waiting:
+        if entry.parent_id is not None or _needs_a_date(entry, waiting):
+            continue
+        if entry.day is not None and (entry.day >= today or entry.type is not EntryType.TASK):
+            to = Destination.daily_log(entry.day)
+        else:
+            to = Destination.monthly_log(month)
+        if entry.type is EntryType.TASK:
+            original = replace(entry, state=TaskState.MIGRATED)
+            migrations.append(Migration(original=original, copy=_open_copy(entry, to=to)))
+        elif entry.type is EntryType.EVENT and to.day is not None:
+            notes = [note for note in waiting if note.parent_id == entry.id]
+            event, notes = move_event(entry, notes, on=to.day)
+            moved += [event, *notes]
+        else:
+            moved.append(replace(entry, location=to.location, day=to.day, month=to.month))
+    return Pull(migrations=migrations, moved=moved)

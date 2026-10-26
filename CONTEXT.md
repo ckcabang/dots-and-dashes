@@ -103,7 +103,7 @@ A separate synthetic User whose journal exists only for monitoring, isolated fro
 - An **Entry** lives on exactly one of: a **Daily Log**, the **Monthly Log**'s task list or the **Future Log**. A **Capture** lives only in the **Inbox**.
 - An **Event** always belongs to a day, except in the **Future Log**, where its date is optional.
 - A **Nested Note** follows its parent when the parent is migrated or scheduled. The original keeps only its state marker.
-- **Monthly Review** marks the pulled **Future Log** Entries **Migrated**.
+- **Monthly Review** marks the pulled **Future Log** Tasks **Migrated**, leaving Open copies on their day or the new Monthly Log's task list. Pulled Events and Notes have no Task State, so they just move; an undated Event waits in the review until it is given a day.
 - Only **Tasks** are migrated or scheduled. Moving an **Event** just changes its date, and standalone **Notes** stay on their day.
 - A **Daily Log** can exist for any date, including future dates this month, which is where Scheduled Tasks land.
 - **Delete** removes an Entry or Capture that should never have existed. **Cancelled** is a recorded decision about a Task.

@@ -10,6 +10,8 @@ docker compose up --build
 
 This starts Postgres and the app, applies the Alembic migrations, and serves today's Daily Log at <http://localhost:8000>. "Today" uses the `JOURNAL_TIMEZONE` environment variable (an IANA name, default `UTC`), for example `JOURNAL_TIMEZONE=America/Los_Angeles docker compose up`.
 
+Feature flags are environment variables too, off unless set to `1`, `true`, `yes` or `on`: `FLAG_MONTHLY_REVIEW` turns on the Monthly Review (`/monthly-review`). With a flag off its pages are hidden and its routes answer 404.
+
 ## Develop
 
 Requires [uv](https://docs.astral.sh/uv/) and Docker.

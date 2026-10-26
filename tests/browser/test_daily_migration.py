@@ -26,6 +26,12 @@ def test_daily_migration_decides_each_open_task_with_one_key(page: Page):
 
     page.goto("/migration")
     planning = page.locator("[data-planning]").get_attribute("data-planning")
+
+    # p plans the other day instead (today in the evening, tomorrow otherwise),
+    # and the keys then act for that day.
+    page.keyboard.press("p")
+    expect(page.locator("[data-planning]")).not_to_have_attribute("data-planning", planning or "")
+    planning = page.locator("[data-planning]").get_attribute("data-planning")
     review = page.locator("#daily-migration")
 
     def entry(text: str):

@@ -109,6 +109,14 @@ def test_a_task_cannot_move_to_the_past_or_skip_the_future_log(destination):
         journal.migrate(_task(day=date(2026, 10, 20)), to=destination, planning=PLANNING)
 
 
+def test_a_task_on_a_later_day_cannot_be_migrated_back_to_the_day_being_planned():
+    # It was Scheduled there; Migrating only carries a Task forward.
+    with pytest.raises(journal.MigrationError):
+        journal.migrate(
+            _task(day=date(2026, 10, 28)), to=Destination.daily_log(PLANNING), planning=PLANNING
+        )
+
+
 def test_a_task_cannot_be_migrated_to_where_it_already_is():
     with pytest.raises(journal.MigrationError):
         journal.migrate(
@@ -123,21 +131,21 @@ def test_in_the_morning_the_day_being_planned_is_today():
     # 15:00 UTC on 25 Oct is 08:00 in Los Angeles.
     morning = datetime(2026, 10, 25, 15, 0, tzinfo=UTC)
 
-    assert journal.day_being_planned(morning, LOS_ANGELES) == date(2026, 10, 25)
+    assert journal.daily_migration_planning(morning, LOS_ANGELES).day == date(2026, 10, 25)
 
 
 def test_the_night_before_the_day_being_planned_is_tomorrow():
     # 05:00 UTC on 26 Oct is still 22:00 on 25 Oct in Los Angeles.
     evening = datetime(2026, 10, 26, 5, 0, tzinfo=UTC)
 
-    planning = journal.day_being_planned(evening, LOS_ANGELES, night_before=True)
+    planning = journal.daily_migration_planning(evening, LOS_ANGELES).day
 
     assert planning == date(2026, 10, 26)
 
 
 def test_the_night_before_migrating_to_tomorrow_marks_a_task_migrated_not_scheduled():
     evening = datetime(2026, 10, 26, 5, 0, tzinfo=UTC)
-    planning = journal.day_being_planned(evening, LOS_ANGELES, night_before=True)
+    planning = journal.daily_migration_planning(evening, LOS_ANGELES).day
     todays_task = _task(day=date(2026, 10, 25))
 
     tomorrow = journal.migrate(
@@ -151,9 +159,9 @@ def test_the_night_before_migrating_to_tomorrow_marks_a_task_migrated_not_schedu
     assert day_after.original.state is SCHEDULED
 
 
-def test_without_the_night_before_migrating_to_tomorrow_schedules_a_task():
+def test_planning_today_in_the_evening_migrating_to_tomorrow_schedules_a_task():
     evening = datetime(2026, 10, 26, 5, 0, tzinfo=UTC)
-    planning = journal.day_being_planned(evening, LOS_ANGELES)
+    planning = journal.daily_migration_planning(evening, LOS_ANGELES, night_before=False).day
 
     migration = journal.migrate(
         _task(day=date(2026, 10, 25)),
@@ -207,7 +215,7 @@ def test_migrated_and_scheduled_tasks_cannot_be_reopened():
 )
 def test_planning_new_years_day_on_new_years_eve_rolls_over_into_january(destination, marked):
     new_years_eve = datetime(2027, 1, 1, 6, 0, tzinfo=UTC)  # 22:00 on 31 Dec in LA
-    planning = journal.day_being_planned(new_years_eve, LOS_ANGELES, night_before=True)
+    planning = journal.daily_migration_planning(new_years_eve, LOS_ANGELES).day
 
     migration = journal.migrate(
         _task(day=date(2026, 12, 31)), to=destination, planning=planning

@@ -617,34 +617,48 @@ class Migration:
     copy: NewEntry
 
 
-def day_being_planned(now: datetime, timezone: tzinfo, *, night_before: bool = False) -> date:
-    """The day a Migration plans for: today, or tomorrow when it is done the night before."""
-    planning = today(now, timezone)
-    return planning + timedelta(days=1) if night_before else planning
-
-
-# Daily Migration run from this local time until midnight is the night before,
-# planning tomorrow; from midnight until then it is the morning, planning today.
+# Migrating from this local time until midnight is the night before, planning
+# tomorrow; from midnight until then it is the morning, planning today.
 EVENING_STARTS = time(18, 0)
 
 
 def is_night_before(now: datetime, timezone: tzinfo) -> bool:
-    """Whether a Daily Migration run now is the night before: from 18:00 local time."""
+    """Whether Migrating now is the night before: from 18:00 local time."""
     return now.astimezone(timezone).time() >= EVENING_STARTS
 
 
-def daily_migration_planning(now: datetime, timezone: tzinfo) -> date:
-    """The day a Daily Migration run now plans: tomorrow in the evening, otherwise today."""
-    return day_being_planned(now, timezone, night_before=is_night_before(now, timezone))
+@dataclass(frozen=True)
+class Planning:
+    """The day being planned, and whether that makes it the night before."""
+
+    day: date
+    night_before: bool
+
+
+def daily_migration_planning(
+    now: datetime, timezone: tzinfo, *, night_before: bool | None = None
+) -> Planning:
+    """The day a Migration done now plans: tomorrow in the evening, otherwise today.
+
+    The User can choose the other day by saying whether it is the night before.
+    """
+    if night_before is None:
+        night_before = is_night_before(now, timezone)
+    planning = today(now, timezone)
+    return Planning(
+        day=planning + timedelta(days=1) if night_before else planning,
+        night_before=night_before,
+    )
 
 
 def migrate(task: Entry, *, to: Destination, planning: date) -> Migration:
     """Migrate or Schedule an Open Task to a destination.
 
     The destination decides which, given the day being planned (see
-    day_being_planned): that day or its month's task list Migrates the Task
-    (>), and a later day that month or a later month in the Future Log
-    Schedules it (<). The copy keeps the Task's text, Signifiers and time.
+    daily_migration_planning): that day or its month's task list Migrates the
+    Task (>), and a later day that month or a later month in the Future Log
+    Schedules it (<). The copy keeps the Task's text, Signifiers and time. A
+    Task only moves forward, so one on a Daily Log never moves to an earlier one.
     """
     if task.type is not EntryType.TASK:
         raise MigrationError("only Tasks are migrated or scheduled")
@@ -652,6 +666,14 @@ def migrate(task: Entry, *, to: Destination, planning: date) -> Migration:
         raise TaskStateError(f"a {task.state} Task cannot be migrated or scheduled")
     if (task.location, task.day, task.month) == (to.location, to.day, to.month):
         raise MigrationError("the Task is already there")
+    if (
+        task.location is Location.DAY
+        and to.location is Location.DAY
+        and task.day is not None
+        and to.day is not None
+        and to.day < task.day
+    ):
+        raise MigrationError("a Task cannot move back to an earlier day")
     state = _marker_for(to, planning=planning)
     copy = NewEntry(
         type=task.type,

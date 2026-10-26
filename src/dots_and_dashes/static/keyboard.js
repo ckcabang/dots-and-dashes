@@ -9,11 +9,12 @@
 //   e  edit (Enter saves, Escape abandons)
 //   Tab  nest a Note under the Task or Event above it    Shift+Tab  un-nest it
 //   Delete / Backspace  delete for good, after confirming
-//   m  Migrate a Task to the day being planned: today, or tomorrow (the night
-//      before) if it is already on today's Daily Log; in Daily Migration, the
-//      day the page says it plans
+//   m  Migrate a Task to the day being planned
 //   M  Migrate a Task to the planned day's month's task list
 //   s  Schedule a Task: asks for a date (YYYY-MM-DD) or a month (YYYY-MM)
+// The server decides the day being planned: tomorrow from 18:00, the night
+// before, and otherwise today. Daily Migration can plan the other day; its
+// choice is sent along.
 //   Alt+ArrowUp / Alt+ArrowDown  reorder an untimed Entry (it re-Anchors)
 // Untimed Entries can also be dragged. Timed Entries move only by changing
 // their time, so they aren't draggable and the server refuses to move them.
@@ -69,7 +70,7 @@
       entry.focus();
       return;
     }
-    const page = await fetch(location.pathname);
+    const page = await fetch(location.pathname + location.search);
     const fresh = new DOMParser().parseFromString(await page.text(), "text/html");
     for (const list of document.querySelectorAll(".entries[id]")) {
       const redrawn = fresh.getElementById(list.id);
@@ -79,35 +80,17 @@
     next?.focus();
   }
 
-  const today = () => document.body.dataset.today;
-  const dayAfter = (day) => {
-    const next = new Date(`${day}T00:00:00Z`);
-    next.setUTCDate(next.getUTCDate() + 1);
-    return next.toISOString().slice(0, 10);
+  // The day Daily Migration chose to plan, if the page is one; elsewhere the
+  // server's own choice stands.
+  const plan = () => {
+    const chosen = document.querySelector("[data-plan]")?.dataset.plan;
+    return chosen ? { plan: chosen } : {};
   };
-
-  // Daily Migration names the day it plans, decided by the server's clock.
-  const plan = () => document.querySelector("[data-planning]")?.dataset;
-
-  function migrateToPlannedDay(entry) {
-    const planned = plan();
-    if (planned) {
-      migrate(entry, { to: "day", date: planned.planning, night_before: planned.nightBefore });
-      return;
-    }
-    const day = entry.dataset.day;
-    if (day && day >= today()) {
-      migrate(entry, { to: "day", date: dayAfter(today()), night_before: "true" });
-    } else {
-      migrate(entry, { to: "day", date: today() });
-    }
-  }
 
   function schedule(entry) {
     const when = prompt("Schedule to a date (YYYY-MM-DD) or a month (YYYY-MM):")?.trim();
-    const night_before = plan()?.nightBefore || "false";
-    if (/^\d{4}-\d{2}$/.test(when)) migrate(entry, { to: "future", month: when, night_before });
-    else if (/^\d{4}-\d{2}-\d{2}$/.test(when)) migrate(entry, { to: "date", date: when, night_before });
+    if (/^\d{4}-\d{2}$/.test(when)) migrate(entry, { to: "future", month: when, ...plan() });
+    else if (/^\d{4}-\d{2}-\d{2}$/.test(when)) migrate(entry, { to: "date", date: when, ...plan() });
     else entry.focus();
   }
 
@@ -224,12 +207,8 @@
     Tab: nest,
     Delete: remove,
     Backspace: remove,
-    m: migrateToPlannedDay,
-    M: (entry) => {
-      const planned = plan();
-      const month = (planned?.planning || today()).slice(0, 7);
-      migrate(entry, { to: "month", month, night_before: planned?.nightBefore || "false" });
-    },
+    m: (entry) => migrate(entry, { to: "day", ...plan() }),
+    M: (entry) => migrate(entry, { to: "month", ...plan() }),
     s: schedule,
   };
 

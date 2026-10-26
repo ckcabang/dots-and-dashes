@@ -34,7 +34,8 @@ def test_migrating_and_scheduling_a_task_from_the_keyboard(page: Page):
     page.keyboard.press("k")
     expect(entry(task)).to_be_focused()
 
-    # m Migrates the selected Task to the day being planned: today.
+    # m Migrates the selected Task to the day being planned, which the server
+    # decides: today, or tomorrow the night before.
     page.keyboard.press("m")
     expect(entry(task)).to_have_attribute("data-state", "migrated")
     expect(entry(task).locator(".state-marker")).to_have_text(">")
@@ -42,7 +43,9 @@ def test_migrating_and_scheduling_a_task_from_the_keyboard(page: Page):
     expect(entry(note)).to_have_count(0)
     expect(entry(task)).to_be_focused()
 
-    page.goto(f"/days/{today}")
+    page.goto("/migration")
+    planning = page.locator("[data-planning]").get_attribute("data-planning")
+    page.goto(f"/days/{planning}")
     expect(entry(task)).to_have_attribute("data-state", "open")
     expect(entry(task).locator(".migration-count")).to_have_text(">>1")
     expect(entry(note)).to_have_count(1)

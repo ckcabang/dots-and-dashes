@@ -61,19 +61,29 @@ class EntryOut(BaseModel):
     migration_count: int
 
 
+# The User's choice of day to plan, overriding the server's: from 18:00 the
+# night before, planning tomorrow, and otherwise today.
+Plan = Literal["today", "tomorrow"]
+
+
+def _night_before(plan: Plan | None) -> bool | None:
+    return None if plan is None else plan == "tomorrow"
+
+
 class MigrationIn(BaseModel):
     """Where to migrate or schedule a Task.
 
-    to is a Daily Log ("day", with date), a month's task list ("month", with
-    month), the Future Log ("future", with month and an optional date), or a
-    date ("date"), which lands on its Daily Log this month or in the Future Log.
-    night_before plans tomorrow rather than today.
+    to is a Daily Log ("day", with date, or else the day being planned), a
+    month's task list ("month", with month, or else the day being planned's),
+    the Future Log ("future", with month and an optional date), or a date
+    ("date"), which lands on its Daily Log this month or in the Future Log.
+    The server decides the day being planned; plan overrides it.
     """
 
     to: Literal["day", "month", "future", "date"]
     on: date | None = Field(None, alias="date")
     month: str | None = Field(None, pattern=r"^\d{4}-\d{2}$")
-    night_before: bool = False
+    plan: Plan | None = None
 
 
 class MigrationOut(BaseModel):
@@ -193,10 +203,10 @@ def _edit(session: Session, entry_id: int, text: str) -> journal.Entry:
 def _destination(body: MigrationIn, planning: date) -> journal.Destination:
     month = _parse_month(body.month) if body.month else None
     match body.to:
-        case "day" if body.on:
-            return journal.Destination.daily_log(body.on)
-        case "month" if month:
-            return journal.Destination.monthly_log(month)
+        case "day":
+            return journal.Destination.daily_log(body.on or planning)
+        case "month":
+            return journal.Destination.monthly_log(month or planning)
         case "future" if month:
             return journal.Destination.future_log(month, on=body.on)
         case "date" if body.on:
@@ -204,14 +214,18 @@ def _destination(body: MigrationIn, planning: date) -> journal.Destination:
     raise HTTPException(422, f"migrating to {body.to!r} needs a date or month")
 
 
+def _planning(request: Request, plan: Plan | None) -> journal.Planning:
+    state = request.app.state
+    return journal.daily_migration_planning(
+        state.clock(), state.settings.timezone, night_before=_night_before(plan)
+    )
+
+
 def _migrate(
     request: Request, session: Session, entry_id: int, body: MigrationIn
 ) -> tuple[journal.Entry, journal.Entry]:
     """Migrate or Schedule a Task, moving its Nested Notes; the original and its copy."""
-    state = request.app.state
-    planning = journal.day_being_planned(
-        state.clock(), state.settings.timezone, night_before=body.night_before
-    )
+    planning = _planning(request, body.plan).day
     task = persistence.get_entry(session, entry_id)
     migration = journal.migrate(task, to=_destination(body, planning), planning=planning)
     persistence.save_entry(session, migration.original)
@@ -222,15 +236,12 @@ def _migrate(
 
 
 def _daily_migration(
-    request: Request, session: Session
-) -> tuple[date, bool, list[journal.MigrationDay]]:
-    """The day a Daily Migration run now plans, whether it is the night before,
-    and the Open Tasks it reviews. Opening it writes nothing, so it can be skipped."""
-    state = request.app.state
-    now, timezone = state.clock(), state.settings.timezone
-    night_before = journal.is_night_before(now, timezone)
-    planning = journal.day_being_planned(now, timezone, night_before=night_before)
-    return planning, night_before, persistence.daily_migration(session, planning)
+    request: Request, session: Session, plan: Plan | None
+) -> tuple[journal.Planning, list[journal.MigrationDay]]:
+    """The day a Daily Migration run now plans and the Open Tasks it reviews.
+    Opening it writes nothing, so it can be skipped."""
+    planning = _planning(request, plan)
+    return planning, persistence.daily_migration(session, planning.day)
 
 
 def _move_event(session: Session, entry_id: int, on: date) -> journal.Entry:
@@ -574,25 +585,29 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
         )
 
     @app.get("/migration", response_class=HTMLResponse)
-    def daily_migration_page(request: Request, session: SessionDep, today: TodayDep) -> Response:
-        planning, night_before, review = _daily_migration(request, session)
+    def daily_migration_page(
+        request: Request, session: SessionDep, today: TodayDep, plan: Plan | None = None
+    ) -> Response:
+        planning, review = _daily_migration(request, session, plan)
         return templates.TemplateResponse(
             request,
             "daily_migration.html",
             {
                 "today": today,
-                "planning": planning,
-                "night_before": night_before,
+                "planning": planning.day,
+                "night_before": planning.night_before,
                 "review": review,
             },
         )
 
     @app.get("/api/daily-migration")
-    def daily_migration(request: Request, session: SessionDep) -> DailyMigrationOut:
-        planning, night_before, review = _daily_migration(request, session)
+    def daily_migration(
+        request: Request, session: SessionDep, plan: Plan | None = None
+    ) -> DailyMigrationOut:
+        planning, review = _daily_migration(request, session, plan)
         return DailyMigrationOut(
-            planning=planning,
-            night_before=night_before,
+            planning=planning.day,
+            night_before=planning.night_before,
             days=[
                 MigrationDayOut(
                     date=day.day,

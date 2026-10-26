@@ -1,5 +1,5 @@
-<li class="entry entry--{{ entry.type }} entry--{{ entry.state }}" data-entry-id="{{ entry.id }}" tabindex="0"
-    {%- if entry.time is none %} draggable="true"{% endif %}>
+<li class="entry entry--{{ entry.type }} entry--{{ entry.state }}{% if entry.parent_id %} entry--nested{% endif %}" data-entry-id="{{ entry.id }}"{% if entry.parent_id %} data-parent-id="{{ entry.parent_id }}"{% endif %} tabindex="0"
+    {%- if entry.time is none and not entry.parent_id %} draggable="true"{% endif %}>
   {%- if entry.priority %}<span class="signifier signifier--priority" title="Priority">*</span>{% endif -%}
   {%- if entry.inspiration %}<span class="signifier signifier--inspiration" title="Inspiration">!</span>{% endif -%}
   <span class="state-marker" title="{{ entry.type | capitalize }}">{{ {"task": "•", "event": "○", "note": "–"}[entry.type] }}</span>

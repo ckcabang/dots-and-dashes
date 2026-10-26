@@ -7,6 +7,7 @@ from sqlalchemy import (
     Boolean,
     Date,
     DateTime,
+    ForeignKey,
     Identity,
     Integer,
     String,
@@ -39,6 +40,10 @@ class EntryRow(Base):
     day: Mapped[date] = mapped_column(Date, index=True)
     # Manual position within its Daily Log; the Journal module orders by it.
     position: Mapped[int] = mapped_column(Integer)
+    # A Nested Note's parent Task or Event.
+    parent_id: Mapped[int | None] = mapped_column(
+        ForeignKey("entries.id", ondelete="SET NULL")
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -53,6 +58,7 @@ class EntryRow(Base):
             time=self.time,
             text=self.text,
             day=self.day,
+            parent_id=self.parent_id,
         )
 
 
@@ -84,11 +90,7 @@ def entries_on(session: Session, day: date) -> list[journal.Entry]:
         .where(EntryRow.day == day)
         .order_by(EntryRow.position, EntryRow.id)
     )
-    return journal.daily_log_order([row.to_entry() for row in rows])
-
-
-def find_day(session: Session, entry_id: int) -> date | None:
-    return session.scalar(select(EntryRow.day).where(EntryRow.id == entry_id))
+    return journal.arrange_daily_log([row.to_entry() for row in rows])
 
 
 def save_daily_log(session: Session, entries: list[journal.Entry]) -> None:
@@ -98,3 +100,16 @@ def save_daily_log(session: Session, entries: list[journal.Entry]) -> None:
         row.position = position
         row.time = entry.time
     session.flush()
+
+
+def get_entry(session: Session, entry_id: int) -> journal.Entry | None:
+    row = session.get(EntryRow, entry_id)
+    return row.to_entry() if row else None
+
+
+def set_parent(session: Session, entry: journal.Entry) -> journal.Entry:
+    """Store whether an Entry is a Nested Note, and under which parent."""
+    row = session.get_one(EntryRow, entry.id)
+    row.parent_id = entry.parent_id
+    session.flush()
+    return row.to_entry()

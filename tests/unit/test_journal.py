@@ -373,3 +373,148 @@ def test_a_timed_entry_cannot_be_dragged():
 
     with pytest.raises(journal.TimedEntryMoveError):
         journal.move_entry(daily_log, _by_text(daily_log, "lunch").id, to=0)
+
+
+def _logged(
+    id: int,
+    type: journal.EntryType,
+    text: str,
+    at: time | None = None,
+    parent_id: int | None = None,
+) -> journal.Entry:
+    return journal.Entry(
+        id=id,
+        type=type,
+        state=journal.TaskState.OPEN if type is journal.EntryType.TASK else None,
+        priority=False,
+        inspiration=False,
+        time=at,
+        text=text,
+        day=date(2026, 10, 25),
+        parent_id=parent_id,
+    )
+
+
+TASK, EVENT, NOTE = journal.EntryType.TASK, journal.EntryType.EVENT, journal.EntryType.NOTE
+
+
+@pytest.mark.parametrize("parent_type", [TASK, EVENT])
+def test_a_note_nests_under_the_task_or_event_above_it(parent_type):
+    parent = _logged(1, parent_type, "dentist")
+    note = _logged(2, NOTE, "bring insurance card")
+
+    nested = journal.nest_note(note, [parent, note])
+
+    assert nested.parent_id == 1
+
+
+def test_a_note_below_a_nested_note_nests_under_the_same_parent():
+    task = _logged(1, TASK, "dentist")
+    card = _logged(2, NOTE, "bring insurance card", parent_id=1)
+    note = _logged(3, NOTE, "ask about the bill")
+
+    nested = journal.nest_note(note, [task, card, note])
+
+    assert nested.parent_id == 1
+
+
+def test_a_note_cannot_nest_under_a_note():
+    idea = _logged(1, NOTE, "the cafe opens at 7")
+    note = _logged(2, NOTE, "and closes at 3")
+
+    with pytest.raises(journal.NestingError):
+        journal.nest_note(note, [idea, note])
+
+
+@pytest.mark.parametrize("type", [TASK, EVENT])
+def test_only_notes_can_nest(type):
+    task = _logged(1, TASK, "dentist")
+    entry = _logged(2, type, "book a cab")
+
+    with pytest.raises(journal.NestingError):
+        journal.nest_note(entry, [task, entry])
+
+
+def test_a_note_at_the_top_of_its_daily_log_has_nothing_to_nest_under():
+    note = _logged(1, NOTE, "slept badly")
+    task = _logged(2, TASK, "dentist")
+
+    with pytest.raises(journal.NestingError):
+        journal.nest_note(note, [note, task])
+
+
+def test_a_nested_note_can_be_un_nested():
+    note = _logged(2, NOTE, "bring insurance card", parent_id=1)
+
+    assert journal.un_nest_note(note).parent_id is None
+
+
+def test_nested_notes_sit_under_their_parent_and_move_with_it():
+    logged = [
+        _logged(1, EVENT, "dinner", time(19, 0)),
+        _logged(2, TASK, "standup", time(9, 30)),
+        _logged(3, NOTE, "book a table", parent_id=1),
+        _logged(4, TASK, "buy milk"),
+        _logged(5, NOTE, "ask about blockers", parent_id=2),
+        _logged(6, NOTE, "bring flowers", parent_id=1),
+    ]
+
+    assert _texts(journal.arrange_daily_log(logged)) == [
+        "standup",
+        "ask about blockers",
+        "buy milk",
+        "dinner",
+        "book a table",
+        "bring flowers",
+    ]
+
+
+def test_a_nested_notes_time_does_not_make_it_an_anchor():
+    logged = [
+        _logged(1, TASK, "dentist", time(15, 0)),
+        _logged(2, NOTE, "9am call to confirm", time(9, 0), parent_id=1),
+        _logged(3, TASK, "pick up prescription"),
+    ]
+
+    assert _texts(journal.arrange_daily_log(logged)) == [
+        "dentist",
+        "9am call to confirm",
+        "pick up prescription",
+    ]
+
+
+def test_changing_a_timed_entrys_time_takes_nested_notes_along_with_its_followers():
+    daily_log = [
+        _logged(1, EVENT, "standup", time(9, 30)),
+        _logged(2, NOTE, "room 4", parent_id=1),
+        _logged(3, TASK, "prep notes"),
+        _logged(4, NOTE, "use last week's", parent_id=3),
+        _logged(5, EVENT, "lunch", time(12, 0)),
+    ]
+
+    changed = journal.change_time(daily_log, 1, to=time(14, 0))
+
+    assert _texts(changed) == ["lunch", "standup", "room 4", "prep notes", "use last week's"]
+
+
+def test_a_dragged_task_takes_its_nested_notes_and_never_lands_inside_another_tasks():
+    daily_log = [
+        _logged(1, TASK, "buy milk"),
+        _logged(2, NOTE, "oat", parent_id=1),
+        _logged(3, EVENT, "standup", time(9, 30)),
+        _logged(4, TASK, "prep notes"),
+        _logged(5, NOTE, "use last week's", parent_id=4),
+    ]
+
+    # Index 2 of the rest of the Daily Log is between "prep notes" and its Nested Note.
+    moved = journal.move_entry(daily_log, 1, to=2)
+
+    assert _texts(moved) == ["standup", "prep notes", "use last week's", "buy milk", "oat"]
+    assert journal.anchor(moved, 1) == daily_log[2]
+
+
+def test_a_nested_note_moves_only_with_its_parent():
+    daily_log = [_logged(1, TASK, "buy milk"), _logged(2, NOTE, "oat", parent_id=1)]
+
+    with pytest.raises(journal.NestedNoteMoveError):
+        journal.move_entry(daily_log, 2, to=0)

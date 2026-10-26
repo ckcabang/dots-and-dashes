@@ -1,11 +1,21 @@
 {% extends "base.html" %}
 
 {% block content %}
+<nav class="day-nav" aria-label="Days">
+  <a id="previous-day" href="/days/{{ previous_day.isoformat() }}" aria-keyshortcuts="[">← Previous day</a>
+  <form method="get" action="/days">
+    <input type="date" name="date" value="{{ day.isoformat() }}" aria-label="Go to date" required>
+    <button>Go</button>
+  </form>
+  <a id="next-day" href="/days/{{ next_day.isoformat() }}" aria-keyshortcuts="]">Next day →</a>
+</nav>
+
 <h1><time datetime="{{ day.isoformat() }}">{{ day.strftime("%A, %-d %B %Y") }}</time></h1>
 
 <form method="post" action="/entries"
       hx-post="/entries" hx-target="#entries" hx-swap="innerHTML"
       hx-on::after-request="if (event.detail.successful) this.reset()">
+  <input type="hidden" name="day" value="{{ day.isoformat() }}">
   <input name="text" aria-label="New entry" autocomplete="off" autofocus required pattern=".*\S.*">
 </form>
 
@@ -29,10 +39,18 @@
     list.addEventListener("keydown", (event) => {
       const entry = event.target.closest("[data-entry-id]");
       if (!entry || !event.altKey || entry.getAttribute("draggable") !== "true") return;
-      const step = { ArrowUp: -1, ArrowDown: 1 }[event.key];
-      if (!step) return;
+      if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
       event.preventDefault();
-      move(entry.dataset.entryId, Math.max(0, entries().indexOf(entry) + step));
+      // `to` counts the Daily Log without the moving Entry and its Nested
+      // Notes; the server keeps it out from between an Entry and its Notes.
+      const all = entries();
+      let to = all.indexOf(entry);
+      if (event.key === "ArrowDown") {
+        to += 1;
+      } else {
+        do to -= 1; while (to > 0 && all[to].dataset.parentId);
+      }
+      move(entry.dataset.entryId, Math.max(0, to));
     });
 
     let dragged = null;
@@ -49,10 +67,50 @@
       event.preventDefault();
       const box = target.getBoundingClientRect();
       const below = event.clientY > box.top + box.height / 2;
-      const others = entries().filter((entry) => entry !== dragged);
+      const all = entries();
+      const start = all.indexOf(dragged);
+      let end = start + 1;
+      while (end < all.length && all[end].dataset.parentId) end += 1;
+      const others = [...all.slice(0, start), ...all.slice(end)];
+      if (!others.includes(target)) return;
       move(dragged.dataset.entryId, others.indexOf(target) + (below ? 1 : 0));
     });
     list.addEventListener("dragend", () => { dragged = null; });
   })();
+
+  // Nesting keys for the selected Entry: Tab nests a Note under the Task or
+  // Event above it, Shift+Tab un-nests it. The server re-renders the Daily
+  // Log, then the same Entry is selected again.
+  (() => {
+    const entries = document.getElementById("entries");
+    const nestingAction = (event) =>
+      event.key !== "Tab" ? null : event.shiftKey ? "un-nest" : "nest";
+
+    entries.addEventListener("keydown", (event) => {
+      const action = nestingAction(event);
+      const entry = event.target.closest(".entry");
+      if (!action || !entry) return;
+      event.preventDefault();
+      const id = entry.dataset.entryId;
+      htmx.ajax("POST", `/entries/${id}/${action}`, { target: entries, swap: "innerHTML" })
+        .then(() => entries.querySelector(`[data-entry-id="${id}"]`)?.focus());
+    });
+  })();
+
+  // [ and ] go to the previous and next day. They are shortcuts only outside
+  // text fields, so they can still be typed into an Entry; Escape leaves one.
+  document.addEventListener("keydown", (event) => {
+    const field = event.target.closest("input, textarea, select, [contenteditable]");
+    if (event.key === "Escape" && field) {
+      field.blur();
+      return;
+    }
+    if (field || event.ctrlKey || event.metaKey || event.altKey) return;
+    const link = { "[": "previous-day", "]": "next-day" }[event.key];
+    if (link) {
+      event.preventDefault();
+      document.getElementById(link).click();
+    }
+  });
 </script>
 {% endblock %}

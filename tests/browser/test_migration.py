@@ -1,3 +1,4 @@
+import re
 from datetime import date, timedelta
 from uuid import uuid4
 
@@ -31,6 +32,10 @@ def test_migrating_and_scheduling_a_task_from_the_keyboard(page: Page):
     # Tab nests the Note under the Task, so it moves with the Task.
     page.keyboard.press("Escape")
     page.keyboard.press("Tab")
+    # The server redraws the Daily Log, then selects the Note again; a key
+    # pressed before that lands on the old list.
+    expect(entry(note)).to_have_class(re.compile(r"\bentry--nested\b"))
+    expect(entry(note)).to_be_focused()
     page.keyboard.press("k")
     expect(entry(task)).to_be_focused()
 

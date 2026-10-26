@@ -18,6 +18,13 @@ jobs:
 
       - uses: astral-sh/setup-uv@v10.3.2  # publishes no floating major tag
 
+      # The lockfile pins Playwright, and so the Chromium build it downloads.
+      - name: Cache Playwright's browsers
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('uv.lock') }}
+
       # `make setup`, plus the system libraries Chromium needs on a bare runner.
       - name: Install dependencies
         run: |

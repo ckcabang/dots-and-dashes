@@ -49,8 +49,11 @@ def test_brackets_typed_into_quick_entry_stay_in_the_text(page: Page):
 def test_any_date_can_be_opened_from_the_date_picker(page: Page):
     page.goto("/")
 
-    page.get_by_label("Go to date").fill("2026-12-25")
-    page.get_by_role("button", name="Go").click()
+    # Enter submits the form; clicking Go timed out under headless Chromium
+    # on WSL, waiting for the button to be stable.
+    date_picker = page.get_by_label("Go to date")
+    date_picker.fill("2026-12-25")
+    date_picker.press("Enter")
 
     expect(page).to_have_url(re.compile(r"/days/2026-12-25$"))
     expect(page.get_by_role("heading", level=1)).to_have_text("Friday, 25 December 2026")

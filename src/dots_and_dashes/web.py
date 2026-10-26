@@ -4,16 +4,18 @@ from collections.abc import Callable, Iterator
 from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request
 from fastapi import Path as PathParam
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from itsdangerous import TimestampSigner
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session, sessionmaker
 from starlette.middleware.sessions import SessionMiddleware
+from starlette.types import ASGIApp
 
 from dots_and_dashes import accounts, journal, persistence
 from dots_and_dashes.chaos import SaveChaos
@@ -286,6 +288,28 @@ def _capture_out(capture: journal.Capture) -> CaptureOut:
 SESSION_MAX_AGE = 30 * 24 * 60 * 60
 # The session cookie's key for the logged-in User's id.
 SESSION_USER = "user_id"
+
+
+class _ClockedSigner(TimestampSigner):
+    """Dates a session cookie by the app's Clock rather than the host's wall clock.
+
+    itsdangerous refuses a cookie whose whole-second timestamp is later than
+    now. A host clock that steps backwards across a second (WSL2 does, by up to
+    half a second) would make a cookie signed a moment ago look forged.
+    """
+
+    def __init__(self, secret_key: str, clock: Clock) -> None:
+        super().__init__(secret_key)
+        self._clock = clock
+
+    def get_timestamp(self) -> int:
+        return int(self._clock().timestamp())
+
+
+class _ClockedSessionMiddleware(SessionMiddleware):
+    def __init__(self, app: ASGIApp, /, *, secret_key: str, clock: Clock, **options: Any) -> None:
+        super().__init__(app, secret_key=secret_key, **options)
+        self.signer = _ClockedSigner(secret_key, clock)
 
 
 class LoginRequiredError(Exception):
@@ -563,8 +587,9 @@ def create_app(
     app.state.clock = clock
     app.state.save_chaos = SaveChaos.from_settings(settings)
     app.add_middleware(
-        SessionMiddleware,
+        _ClockedSessionMiddleware,
         secret_key=settings.session_secret,
+        clock=clock,
         session_cookie="session",
         max_age=SESSION_MAX_AGE,
         same_site="lax",

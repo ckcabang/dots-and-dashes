@@ -185,7 +185,9 @@ class _Stderr(logging.StreamHandler):
 
 # The app's own lines in its stderr, beside the server's: a failed request's
 # error type and trace ID, to find its trace and logs in Grafana.
-_output = logging.getLogger(SCOPE)
+# Its own name, not the package's, so other modules' loggers don't inherit
+# this handler.
+_output = logging.getLogger(__name__)
 _output.propagate = False
 if not _output.handlers:
     _handler = _Stderr()

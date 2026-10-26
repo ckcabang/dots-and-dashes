@@ -185,8 +185,12 @@ def _out(entry: journal.Entry) -> EntryOut:
     return EntryOut.model_validate(entry, from_attributes=True)
 
 
-# A login lasts 30 days, on desktop and phone alike.
+# A login lasts 30 days, on desktop and phone alike. The session lives only in
+# its signed cookie, so logging out clears the cookie in that browser; a copy
+# taken earlier stays valid until it expires.
 SESSION_MAX_AGE = 30 * 24 * 60 * 60
+# The session cookie's key for the logged-in User's id.
+SESSION_USER = "user_id"
 
 
 class LoginRequiredError(Exception):
@@ -195,7 +199,7 @@ class LoginRequiredError(Exception):
 
 def _current_user(request: Request) -> accounts.User:
     """The logged-in User, from the signed session cookie."""
-    user_id = request.session.get("user_id")
+    user_id = request.session.get(SESSION_USER)
     if user_id is not None:
         with request.app.state.sessionmaker() as session:
             if user := persistence.get_user(session, user_id):
@@ -428,6 +432,7 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
         session_cookie="session",
         max_age=SESSION_MAX_AGE,
         same_site="lax",
+        https_only=settings.secure_cookies,
     )
     app.mount("/static", StaticFiles(directory=PACKAGE_DIR / "static"), name="static")
 
@@ -454,7 +459,9 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
         with app.state.sessionmaker() as session:
             found = persistence.user_by_email(session, email)
         user, password_hash = found if found else (None, None)
-        if user is None or not accounts.password_matches(password_hash, password):
+        # Checked even with no such User, so a wrong email is as slow to refuse.
+        matched = accounts.password_matches(password_hash, password)
+        if user is None or not matched:
             return templates.TemplateResponse(
                 request,
                 "login.html",
@@ -462,7 +469,7 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
                 status_code=401,
             )
         request.session.clear()
-        request.session["user_id"] = user.id
+        request.session[SESSION_USER] = user.id
         return RedirectResponse("/", status_code=303)
 
     @app.post("/logout")
@@ -507,8 +514,8 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
     ) -> Response:
         return render_daily_log(request, session, today, today)
 
-    @app.get("/days")
-    def go_to_date(on: Annotated[date, Query(alias="date")], user: UserDep) -> Response:
+    @app.get("/days", dependencies=[Depends(_current_user)])
+    def go_to_date(on: Annotated[date, Query(alias="date")]) -> Response:
         return RedirectResponse(f"/days/{on.isoformat()}", status_code=303)
 
     @app.get("/days/{day}", response_class=HTMLResponse)

@@ -24,6 +24,7 @@
   </style>
 </head>
 <body{% if today is defined %} data-today="{{ today.isoformat() }}"{% endif %}>
+  {# Journal pages pass today, and only they are behind a login. #}
   {% if today is defined %}
   <form method="post" action="/logout" class="logout"><button>Log out</button></form>
   {% endif %}

@@ -151,3 +151,15 @@ def test_todays_daily_log_follows_the_users_timezone(settings, create_user, logg
 
     assert los_angeles["date"] == "2026-10-25"
     assert tokyo_today["date"] == "2026-10-26"
+
+
+def test_with_secure_cookies_on_the_session_cookie_is_sent_over_https_only(
+    settings, clock, user
+):
+    app = create_app(replace(settings, secure_cookies=True), clock=clock)
+    with TestClient(app, base_url="https://testserver", follow_redirects=False) as client:
+        logged_in = client.post(
+            "/login", data={"email": user, "password": "correct horse battery staple"}
+        )
+
+    assert "secure" in logged_in.headers["set-cookie"].lower()

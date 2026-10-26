@@ -23,6 +23,8 @@ On a phone, `/capture` saves raw text as a Capture in the Inbox; on desktop the 
 
 Feature flags are environment variables too, off unless set to `1`, `true`, `yes` or `on`: `FLAG_MONTHLY_REVIEW` turns on the Monthly Review (`/monthly-review`). With a flag off its pages are hidden and its routes answer 404.
 
+Telemetry goes over OTLP to Grafana Cloud when `OTEL_EXPORTER_OTLP_ENDPOINT` (the stack's OTLP gateway, `https://otlp-gateway-<zone>.grafana.net/otlp`) and `OTEL_EXPORTER_OTLP_HEADERS` (`Authorization=Basic <base64 of instance-id:token>`) are set; without them the app runs the same and exports nothing. `DEPLOYMENT_ENVIRONMENT` (`dev`, `prod`) and the Machine's `FLY_IMAGE_REF` label every signal. Every request is a trace, with a span per database statement; logging an Entry (`POST /entries`, `POST /api/entries`) also counts `entry.saves` by `outcome` (`saved`, `refused`, `failed`), times it in `entry.save.duration` (seconds, with exemplars linking to the trace) and logs `Entry saved` or `Entry save failed` on the same trace. No signal carries Entry or Capture text: only an Entry's type, text length and ID, and an error's type, never its message.
+
 ## Develop
 
 Requires [uv](https://docs.astral.sh/uv/) and Docker.

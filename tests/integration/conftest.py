@@ -72,7 +72,7 @@ def database_url() -> str:
 def settings(database_url: str) -> Settings:
     engine = create_engine(database_url)
     with engine.begin() as conn:
-        conn.execute(text("TRUNCATE entries, users RESTART IDENTITY"))
+        conn.execute(text("TRUNCATE entries, captures, users RESTART IDENTITY"))
     engine.dispose()
     return Settings(database_url=database_url)
 

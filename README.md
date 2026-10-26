@@ -19,6 +19,8 @@ docker compose exec -e CANARY_PASSWORD app dots-and-dashes create-user --email c
 
 Each User's timezone (an IANA name) decides their "today". A login lasts 30 days, in a session cookie signed with `SESSION_SECRET`. Set it wherever the app is deployed; without it each app process makes its own, so a restart logs everyone out. Set `SECURE_COOKIES=on` where the app is served over HTTPS, so the cookie is never sent in the clear. Entries logged before Users existed belong to the first User created who isn't the Canary User.
 
+On a phone, `/capture` saves raw text as a Capture in the Inbox; on desktop the Daily Log shows the Inbox count, and `/inbox` (`i` from the Daily Log) Triages each Capture into an Entry from the keyboard.
+
 Feature flags are environment variables too, off unless set to `1`, `true`, `yes` or `on`: `FLAG_MONTHLY_REVIEW` turns on the Monthly Review (`/monthly-review`). With a flag off its pages are hidden and its routes answer 404.
 
 ## Develop

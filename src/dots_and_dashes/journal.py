@@ -368,11 +368,12 @@ def reopen(entry: Entry) -> Entry:
     )
 
 
-def as_typed(entry: Entry) -> str:
+def as_typed(entry: Entry | ParsedEntry) -> str:
     """The Entry as it would be typed: the inverse of reading text with log_entry.
 
-    Editing offers this text, so it spells out the Prefix (Signifiers, type,
-    time) that log_entry reads back into the same Entry. A plain untimed Task
+    Editing offers this text, and Triage offers its suggestion this way, so it
+    spells out the Prefix (Signifiers, type, time) that log_entry reads back
+    into the same Entry. A plain untimed Task
     is offered as its bare text, unless that text would itself read as a Prefix.
     """
     plain = ParsedEntry(
@@ -1015,3 +1016,62 @@ def date_waiting_event(
     if month_of(on) != month:
         raise DateOutsideMonthError("a waiting Event goes on a day this month")
     return _onto_daily_log(event, on), [_onto_daily_log(note, on) for note in nested_notes]
+
+
+# Captures and Triage: on the go, raw text is jotted down as a Capture in the
+# Inbox, unclassified. A Capture is not an Entry; it becomes one only through
+# Triage, which reads its text with the Prefix rules and places it.
+
+
+class BlankCaptureError(ValueError):
+    """Raised when there is no text to capture."""
+
+
+@dataclass(frozen=True)
+class NewCapture:
+    """A Capture jotted down but not yet stored."""
+
+    text: str
+
+
+@dataclass(frozen=True)
+class Capture:
+    """A stored Capture: raw text waiting in the Inbox."""
+
+    id: int
+    text: str
+
+
+def capture(text: str) -> NewCapture:
+    """Keep text jotted down on the go as a Capture: raw, exactly as typed,
+    and unclassified until Triage."""
+    if not text.strip():
+        raise BlankCaptureError("a Capture needs some text")
+    return NewCapture(text=text)
+
+
+def triage_suggestion(capture: Capture) -> ParsedEntry:
+    """What Triage suggests a Capture becomes: its text read with the Prefix
+    rules, so a Prefix typed on the go isn't wasted. No Prefix suggests a Task."""
+    return _read_entry(capture.text)
+
+
+def triage(
+    capture: Capture, *, to: Destination, today: date, text: str | None = None
+) -> NewEntry:
+    """Turn a Capture into an Entry at a destination: a day's Daily Log, the
+    current month's task list, or a later month in the Future Log, optionally
+    on a date.
+
+    Its text is read with the Prefix rules, as triage_suggestion suggests;
+    text adjusts the suggestion, written the same way. The destination's own
+    rules apply, as for an Entry logged there.
+    """
+    text = capture.text if text is None else text
+    if to.location is Location.DAY and to.day is not None:
+        return log_entry(text, on=to.day)
+    if to.location is Location.MONTH and to.month == month_of(today):
+        return log_month_entry(text, month=to.month, today=today)
+    if to.location is Location.FUTURE and to.month is not None:
+        return log_future_entry(text, month=to.month, today=today, on=to.day)
+    raise PlacementError("a Capture goes on a Daily Log, the Monthly Log or the Future Log")

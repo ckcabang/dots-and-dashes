@@ -9,7 +9,13 @@ from fastapi.testclient import TestClient
 from dots_and_dashes.web import create_app
 
 # A value for each path parameter, so every route can be asked for.
-PATH_VALUES = {"entry_id": "1", "day": "2026-10-25", "month": "2026-10", "change": "complete"}
+PATH_VALUES = {
+    "entry_id": "1",
+    "capture_id": "1",
+    "day": "2026-10-25",
+    "month": "2026-10",
+    "change": "complete",
+}
 PUBLIC = {"/login", "/logout", "/openapi.json", "/docs", "/docs/oauth2-redirect", "/redoc"}
 
 

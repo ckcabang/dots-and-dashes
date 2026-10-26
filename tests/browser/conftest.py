@@ -1,30 +1,13 @@
-import threading
-import time
-from collections.abc import Iterator
+"""The browser suite drives the app container of the test Compose stack.
+
+`make test` starts that stack; BASE_URL points elsewhere if needed.
+"""
+
+import os
 
 import pytest
-import uvicorn
-
-from dots_and_dashes.web import create_app
 
 
-@pytest.fixture
-def live_server(settings, clock) -> Iterator[str]:
-    """Serve the app on a free local port for the browser to drive."""
-    config = uvicorn.Config(
-        create_app(settings, clock=clock),
-        host="127.0.0.1",
-        port=0,
-        log_level="warning",
-    )
-    server = uvicorn.Server(config)
-    thread = threading.Thread(target=server.run, daemon=True)
-    thread.start()
-    while not server.started:
-        time.sleep(0.01)
-    port = server.servers[0].sockets[0].getsockname()[1]
-
-    yield f"http://127.0.0.1:{port}"
-
-    server.should_exit = True
-    thread.join()
+@pytest.fixture(scope="session")
+def base_url() -> str:
+    return os.environ.get("BASE_URL", "http://localhost:58000")

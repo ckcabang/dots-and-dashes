@@ -1,7 +1,7 @@
-"""Fixtures shared by the integration and browser suites.
+"""Fixtures for the integration suite.
 
-Both run against a real Postgres. Point TEST_DATABASE_URL at one, or let
-`make test` start the Compose `db` service, which the default URL targets.
+They run against a real Postgres. Point TEST_DATABASE_URL at one, or let
+`make test` start the test Compose stack, which the default URL targets.
 The test database is created if missing and rebuilt with Alembic once per run.
 """
 
@@ -19,7 +19,7 @@ from dots_and_dashes.settings import Settings
 
 TEST_DATABASE_URL = os.environ.get(
     "TEST_DATABASE_URL",
-    "postgresql+psycopg://dots:dots@localhost:5432/dots_and_dashes_test",
+    "postgresql+psycopg://dots:dots@localhost:55432/dots_and_dashes_test",
 )
 
 # 03:00 UTC on 26 Oct is still 25 Oct in Los Angeles, so tests that see
@@ -43,7 +43,7 @@ def _create_database_if_missing(url: str) -> None:
     admin.dispose()
 
 
-ALEMBIC_INI = Path(__file__).parents[1] / "alembic.ini"
+ALEMBIC_INI = Path(__file__).parents[2] / "alembic.ini"
 
 
 @pytest.fixture(scope="session")

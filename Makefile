@@ -9,10 +9,13 @@ setup:
 up:
 	docker compose up --build
 
-# Run the unit, integration and browser suites. They use the Compose `db`
-# service unless TEST_DATABASE_URL points at another Postgres.
+# Run the unit, integration and browser suites against a separate Compose
+# project (own ports and volume), so the dev journal is never touched.
+# Integration tests use its Postgres; Playwright drives its app container.
+TEST_STACK = COMPOSE_PROJECT_NAME=dots-and-dashes-test DB_PORT=55432 APP_PORT=58000
+
 test:
-	@if [ -z "$$TEST_DATABASE_URL" ]; then docker compose up -d --wait db; fi
+	$(TEST_STACK) docker compose up -d --build --wait
 	uv run pytest
 
 typecheck:

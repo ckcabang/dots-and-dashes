@@ -21,8 +21,8 @@ jobs:
       # `make setup`, plus the system libraries Chromium needs on a bare runner.
       - name: Install dependencies
         run: |
-          uv sync --locked
-          uv run playwright install --with-deps chromium
+          make setup
+          uv run playwright install-deps chromium
 
       - name: Typecheck and test
         run: make check

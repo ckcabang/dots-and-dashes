@@ -2,7 +2,7 @@
 
 # Install dependencies and the browser Playwright drives.
 setup:
-	uv sync
+	uv sync --locked
 	uv run playwright install chromium
 
 # Start the app and Postgres at http://localhost:8000.

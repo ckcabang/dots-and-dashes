@@ -35,8 +35,13 @@ class EntryRow(Base):
         )
 
 
-def add_entry(session: Session, new: journal.NewEntry) -> journal.Entry:
-    row = EntryRow(type=new.type, state=new.state, text=new.text, day=new.day)
+def add_entry(session: Session, new_entry: journal.NewEntry) -> journal.Entry:
+    row = EntryRow(
+        type=new_entry.type,
+        state=new_entry.state,
+        text=new_entry.text,
+        day=new_entry.day,
+    )
     session.add(row)
     session.flush()
     return row.to_entry()

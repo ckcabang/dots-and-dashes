@@ -7,6 +7,7 @@ The test database is created if missing and rebuilt with Alembic once per run.
 
 import os
 from datetime import UTC, datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -42,8 +43,15 @@ def _create_database_if_missing(url: str) -> None:
     admin.dispose()
 
 
+ALEMBIC_INI = Path(__file__).parents[1] / "alembic.ini"
+
+
 @pytest.fixture(scope="session")
 def database_url() -> str:
+    # The schema is dropped below, so never run against a non-test database.
+    database = make_url(TEST_DATABASE_URL).database or ""
+    if not database.endswith("_test"):
+        pytest.exit(f"TEST_DATABASE_URL must name a *_test database, not {database!r}")
     _create_database_if_missing(TEST_DATABASE_URL)
     engine = create_engine(TEST_DATABASE_URL)
     with engine.begin() as conn:
@@ -51,7 +59,7 @@ def database_url() -> str:
         conn.execute(text("CREATE SCHEMA public"))
     engine.dispose()
 
-    config = Config("alembic.ini")
+    config = Config(ALEMBIC_INI)
     config.set_main_option("sqlalchemy.url", TEST_DATABASE_URL)
     command.upgrade(config, "head")
     return TEST_DATABASE_URL

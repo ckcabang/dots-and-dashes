@@ -60,3 +60,14 @@ def test_blank_text_is_refused_and_logs_nothing(app_client):
 
     assert refused.status_code == 422
     assert daily_log["entries"] == []
+
+
+def test_quick_entry_from_htmx_returns_just_the_new_task(app_client):
+    with app_client() as client:
+        added = client.post(
+            "/entries", data={"text": "buy milk"}, headers={"HX-Request": "true"}
+        )
+
+    assert added.status_code == 201
+    assert added.text.lstrip().startswith("<li")
+    assert "buy milk" in added.text

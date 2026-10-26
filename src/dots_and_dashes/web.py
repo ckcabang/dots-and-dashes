@@ -19,8 +19,8 @@ from dots_and_dashes.settings import Settings
 
 Clock = Callable[[], datetime]
 
-HERE = Path(__file__).parent
-templates = Jinja2Templates(directory=HERE / "templates")
+PACKAGE_DIR = Path(__file__).parent
+templates = Jinja2Templates(directory=PACKAGE_DIR / "templates")
 
 
 def _system_clock() -> datetime:
@@ -33,8 +33,8 @@ class NewEntryIn(BaseModel):
 
 class EntryOut(BaseModel):
     id: int
-    type: str
-    state: str | None
+    type: journal.EntryType
+    state: journal.TaskState | None
     text: str
     day: date
 
@@ -71,7 +71,7 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
     app = FastAPI(title="Dots & Dashes", lifespan=lifespan)
     app.state.settings = settings
     app.state.clock = clock
-    app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
+    app.mount("/static", StaticFiles(directory=PACKAGE_DIR / "static"), name="static")
 
     @app.exception_handler(journal.BlankEntryError)
     def refuse_blank_entry(request: Request, exc: journal.BlankEntryError) -> Response:

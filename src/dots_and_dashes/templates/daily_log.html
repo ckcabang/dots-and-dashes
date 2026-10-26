@@ -6,7 +6,7 @@
 <form method="post" action="/entries"
       hx-post="/entries" hx-target="#entries" hx-swap="beforeend"
       hx-on::after-request="if (event.detail.successful) this.reset()">
-  <input name="text" aria-label="New entry" autocomplete="off" autofocus required>
+  <input name="text" aria-label="New entry" autocomplete="off" autofocus required pattern=".*\S.*">
 </form>
 
 <ul id="entries" class="entries">

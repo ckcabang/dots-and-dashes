@@ -20,12 +20,12 @@ make test       # unit, integration and browser tests
 make typecheck  # mypy
 ```
 
-`make test` starts the Compose `db` service and runs every suite against a `dots_and_dashes_test` database, which it creates and migrates. To use a different Postgres, set `TEST_DATABASE_URL` (a SQLAlchemy URL such as `postgresql+psycopg://user:pass@host:5432/dbname`); `make test` then skips Docker.
+`make test` builds and starts a separate Compose project, `dots-and-dashes-test` (Postgres on port 55432, app on 58000, its own volume), so your dev journal is never touched. Integration tests run against a `dots_and_dashes_test` database on that Postgres, which they create and migrate. Browser tests drive the stack's app container. To point the suites elsewhere, set `TEST_DATABASE_URL` (a SQLAlchemy URL naming a `*_test` database) and `BASE_URL`. Stop the stack with `COMPOSE_PROJECT_NAME=dots-and-dashes-test docker compose down`.
 
 | Suite | Path | Seam |
 |---|---|---|
 | Unit | `tests/unit` | The Journal domain module (`journal.py`), which is pure: no I/O |
 | Integration | `tests/integration` | The HTTP app in-process, against a real Postgres |
-| Browser | `tests/browser` | Playwright driving the app served on a local port |
+| Browser | `tests/browser` | Playwright driving the app container of the test Compose stack |
 
 New migrations: `DATABASE_URL=… uv run alembic revision --autogenerate -m "…"`.

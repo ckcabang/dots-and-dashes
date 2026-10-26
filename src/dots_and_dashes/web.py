@@ -150,6 +150,24 @@ class DailyMigrationOut(BaseModel):
     days: list[MigrationDayOut]
 
 
+class LeftoverDayOut(BaseModel):
+    date: date
+    tasks: list[EntryOut]
+
+
+class WaitingEventOut(BaseModel):
+    event: EntryOut
+    notes: list[EntryOut]
+
+
+class MonthlyReviewOut(BaseModel):
+    month: str
+    task_list: list[EntryOut]
+    days: list[LeftoverDayOut]
+    to_pull: list[EntryOut]
+    needs_a_date: list[WaitingEventOut]
+
+
 def _parse_month(value: str) -> date:
     """Read a month written YYYY-MM as the date of its first day."""
     try:
@@ -241,6 +259,15 @@ def _planning(request: Request, plan: Plan | None) -> journal.Planning:
     )
 
 
+def _store_migration(session: Session, migration: journal.Migration) -> journal.Entry:
+    """Store a migrated Task and its new copy, moving its Nested Notes; the copy."""
+    task = persistence.save_entry(session, migration.original)
+    copy = _add(session, migration.copy)
+    for note in journal.move_nested_notes(persistence.nested_notes(session, task.id), to=copy):
+        _place(session, persistence.save_entry(session, note))
+    return copy
+
+
 def _migrate(
     request: Request, session: Session, entry_id: int, body: MigrationIn
 ) -> tuple[journal.Entry, journal.Entry]:
@@ -248,10 +275,7 @@ def _migrate(
     planning = _planning(request, body.plan).day
     task = persistence.get_entry(session, entry_id)
     migration = journal.migrate(task, to=_destination(body, planning), planning=planning)
-    persistence.save_entry(session, migration.original)
-    copy = _add(session, migration.copy)
-    for note in journal.move_nested_notes(persistence.nested_notes(session, task.id), to=copy):
-        _place(session, persistence.save_entry(session, note))
+    copy = _store_migration(session, migration)
     return persistence.get_entry(session, task.id), copy
 
 
@@ -264,9 +288,48 @@ def _daily_migration(
     return planning, persistence.daily_migration(session, planning.day)
 
 
+def _pull_from_future_log(session: Session, today: date) -> None:
+    """Pull this month's Future Log into its Monthly Log."""
+    future = persistence.future_log_month(session, journal.month_of(today))
+    pull = journal.pull_from_future_log(future, today=today)
+    for migration in pull.migrations:
+        _store_migration(session, migration)
+    for moved in pull.moved:
+        _place(session, persistence.save_entry(session, moved))
+
+
+def _monthly_review_out(review: journal.MonthlyReview) -> MonthlyReviewOut:
+    return MonthlyReviewOut(
+        month=f"{review.month:%Y-%m}",
+        task_list=[_out(task) for task in review.task_list],
+        days=[
+            LeftoverDayOut(date=day.day, tasks=[_out(task) for task in day.tasks])
+            for day in review.days
+        ],
+        to_pull=[_out(entry) for entry in review.to_pull],
+        needs_a_date=[
+            WaitingEventOut(event=_out(w.event), notes=[_out(note) for note in w.notes])
+            for w in review.needs_a_date
+        ],
+    )
+
+
 def _move_event(session: Session, entry_id: int, on: date) -> journal.Entry:
     event = persistence.get_entry(session, entry_id)
     moved, notes = journal.move_event(event, persistence.nested_notes(session, entry_id), on=on)
+    return _store_moved_event(session, moved, notes)
+
+
+def _date_waiting_event(session: Session, entry_id: int, on: date, today: date) -> None:
+    event = persistence.get_entry(session, entry_id)
+    nested_notes = persistence.nested_notes(session, entry_id)
+    moved, notes = journal.date_waiting_event(event, nested_notes, on=on, today=today)
+    _store_moved_event(session, moved, notes)
+
+
+def _store_moved_event(
+    session: Session, moved: journal.Entry, notes: list[journal.Entry]
+) -> journal.Entry:
     saved = persistence.save_entry(session, moved)
     _place(session, saved)
     for note in notes:
@@ -560,6 +623,7 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
                 else None,
                 "calendar": calendar,
                 "tasks": tasks,
+                "monthly_review": settings.monthly_review,
             },
         )
 
@@ -632,6 +696,49 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
                 for day in review
             ],
         )
+
+    # Behind the FLAG_MONTHLY_REVIEW feature flag: with it off these routes
+    # don't exist, so they answer 404, and the Monthly Log doesn't link here.
+    if settings.monthly_review:
+
+        @app.get("/monthly-review", response_class=HTMLResponse)
+        def monthly_review_page(
+            request: Request, session: SessionDep, today: TodayDep
+        ) -> Response:
+            review = persistence.monthly_review(session, today)
+            return templates.TemplateResponse(
+                request,
+                "monthly_review.html",
+                {
+                    "today": today,
+                    "review": review,
+                    "last_month": journal.previous_month(review.month),
+                },
+            )
+
+        @app.post("/monthly-review/pull")
+        def pull_from_page(session: SessionDep, today: TodayDep) -> Response:
+            _pull_from_future_log(session, today)
+            return RedirectResponse("/monthly-review", status_code=303)
+
+        @app.post("/monthly-review/entries/{entry_id}/date")
+        def date_event_from_page(
+            entry_id: int,
+            on: Annotated[date, Form(alias="date")],
+            session: SessionDep,
+            today: TodayDep,
+        ) -> Response:
+            _date_waiting_event(session, entry_id, on, today)
+            return RedirectResponse("/monthly-review", status_code=303)
+
+        @app.get("/api/monthly-review")
+        def monthly_review(session: SessionDep, today: TodayDep) -> MonthlyReviewOut:
+            return _monthly_review_out(persistence.monthly_review(session, today))
+
+        @app.post("/api/monthly-review/pull")
+        def pull(session: SessionDep, today: TodayDep) -> MonthlyReviewOut:
+            _pull_from_future_log(session, today)
+            return _monthly_review_out(persistence.monthly_review(session, today))
 
     @app.get("/future", response_class=HTMLResponse)
     def future_log_page(request: Request, session: SessionDep, today: TodayDep) -> Response:

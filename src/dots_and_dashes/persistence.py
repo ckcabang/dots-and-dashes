@@ -258,3 +258,40 @@ def daily_migration(session: Session, planning: date) -> list[journal.MigrationD
         .order_by(EntryRow.day, EntryRow.position, EntryRow.id)
     )
     return journal.daily_migration(_loaded(session, rows), planning=planning)
+
+
+def monthly_review(session: Session, today: date) -> journal.MonthlyReview:
+    """The Monthly Review of the User's current month. It only reads."""
+    month = journal.month_of(today)
+    last_month = journal.previous_month(month)
+    # Last month's Daily Logs in manual order, so each keeps its Daily Log order.
+    days = session.scalars(
+        select(EntryRow)
+        .where(
+            EntryRow.location == journal.Location.DAY,
+            EntryRow.day >= last_month,
+            EntryRow.day < month,
+        )
+        .order_by(EntryRow.day, EntryRow.position, EntryRow.id)
+    )
+    task_list = session.scalars(
+        select(EntryRow)
+        .where(EntryRow.location == journal.Location.MONTH, EntryRow.month == last_month)
+        .order_by(EntryRow.id)
+    )
+    entries = [
+        *_loaded(session, days),
+        *_loaded(session, task_list),
+        *future_log_month(session, month),
+    ]
+    return journal.monthly_review(entries, today=today)
+
+
+def future_log_month(session: Session, month: date) -> list[journal.Entry]:
+    """A month's Future Log Entries, in the order they were logged."""
+    rows = session.scalars(
+        select(EntryRow)
+        .where(EntryRow.location == journal.Location.FUTURE, EntryRow.month == month)
+        .order_by(EntryRow.id)
+    )
+    return _loaded(session, rows)

@@ -1,8 +1,20 @@
 """The Persistence module: maps Journal domain values to Postgres tables."""
 
 from datetime import date, datetime
+from datetime import time as TimeOfDay
 
-from sqlalchemy import Date, DateTime, Identity, String, Text, func, select
+from sqlalchemy import (
+    Boolean,
+    Date,
+    DateTime,
+    Identity,
+    String,
+    Text,
+    Time,
+    false,
+    func,
+    select,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 from dots_and_dashes import journal
@@ -19,6 +31,9 @@ class EntryRow(Base):
     type: Mapped[str] = mapped_column(String(16))
     # Only Tasks have a Task State.
     state: Mapped[str | None] = mapped_column(String(16))
+    priority: Mapped[bool] = mapped_column(Boolean, server_default=false())
+    inspiration: Mapped[bool] = mapped_column(Boolean, server_default=false())
+    time: Mapped[TimeOfDay | None] = mapped_column(Time)
     text: Mapped[str] = mapped_column(Text)
     day: Mapped[date] = mapped_column(Date, index=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -30,6 +45,9 @@ class EntryRow(Base):
             id=self.id,
             type=journal.EntryType(self.type),
             state=journal.TaskState(self.state) if self.state else None,
+            priority=self.priority,
+            inspiration=self.inspiration,
+            time=self.time,
             text=self.text,
             day=self.day,
         )
@@ -44,6 +62,9 @@ def _columns(entry: journal.NewEntry | journal.Entry) -> dict[str, object]:
     return {
         "type": entry.type,
         "state": entry.state,
+        "priority": entry.priority,
+        "inspiration": entry.inspiration,
+        "time": entry.time,
         "text": entry.text,
         "day": entry.day,
     }
@@ -60,7 +81,7 @@ def entries_on(session: Session, day: date) -> list[journal.Entry]:
     rows = session.scalars(
         select(EntryRow).where(EntryRow.day == day).order_by(EntryRow.id)
     )
-    return [row.to_entry() for row in rows]
+    return journal.daily_log_order([row.to_entry() for row in rows])
 
 
 def _row(session: Session, entry_id: int) -> EntryRow:

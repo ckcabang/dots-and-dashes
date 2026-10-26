@@ -82,6 +82,12 @@ EMAIL = "me@example.com"
 
 
 @pytest.fixture
+def password() -> str:
+    """Every User's password, for logging in without the `logged_in` fixture."""
+    return PASSWORD
+
+
+@pytest.fixture
 def create_user(settings, monkeypatch):
     """Create a User the way the operator does: with the CLI, the password from a secret."""
 

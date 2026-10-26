@@ -53,5 +53,8 @@
           "make test-logs",
           "make test-down"
         ]
+      },
+      "enabledPlugins": {
+        "mattpocock-skills@claude-plugins-official": true
       }
     }

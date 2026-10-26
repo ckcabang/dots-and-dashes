@@ -11,7 +11,7 @@ LOS_ANGELES = ZoneInfo("America/Los_Angeles")
 
 
 def _at(local: str) -> datetime:
-    """An instant given as Los Angeles wall-clock time, as the injected clock would give it in UTC."""
+    """An instant given as Los Angeles wall-clock time, as the injected clock gives it in UTC."""
     return datetime.fromisoformat(local).replace(tzinfo=LOS_ANGELES).astimezone(UTC)
 
 
@@ -139,7 +139,8 @@ def test_the_night_before_todays_open_tasks_are_from_an_earlier_day():
 
 
 def test_daily_migration_is_empty_when_nothing_is_left_open():
-    assert journal.daily_migration([_entry(1, "sent invoice", state=COMPLETED)], planning=PLANNING) == []
+    completed = _entry(1, "sent invoice", state=COMPLETED)
+    assert journal.daily_migration([completed], planning=PLANNING) == []
 
 
 def _grouped(review: list[journal.MigrationDay]) -> list[tuple[date, str | None, list[str]]]:

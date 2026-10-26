@@ -580,7 +580,8 @@ def future_log(entries: list[Entry], *, today: date) -> list[FutureMonth]:
             month=month,
             entries=_with_nested_notes(
                 by_month[month],
-                lambda entries: sorted(entries, key=lambda e: (e.day is None, e.day or month)),
+                # Called right away, inside this iteration, so `month` is the current one.
+                lambda entries: sorted(entries, key=lambda e: (e.day is None, e.day or month)),  # noqa: B023
             ),
         )
         for month in sorted(by_month)

@@ -5,6 +5,8 @@
           "Bash(make check)",
           "Bash(make test-logs)",
           "Bash(make test-down)",
+          "Bash(make test-integration)",
+          "Bash(make test-browser)",
           "Bash(docker compose up)",
           "Bash(docker compose up *)",
           "Bash(docker compose down)",
@@ -60,7 +62,9 @@
           "make test",
           "make check",
           "make test-logs",
-          "make test-down"
+          "make test-down",
+          "make test-integration",
+          "make test-browser"
         ]
       }
     }

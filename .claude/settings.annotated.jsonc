@@ -9,6 +9,9 @@
         "Bash(make check)",
         "Bash(make test-logs)",
         "Bash(make test-down)",
+        // One suite against the test stack; make test-unit needs no stack and runs sandboxed
+        "Bash(make test-integration)",
+        "Bash(make test-browser)",
         // Lifecycle subcommands only, each bare and with arguments ("up *" doesn't match plain "up").
         // No exec/run (arbitrary commands in a container) and no global flags (-f other.yml up)
         "Bash(docker compose up)",
@@ -78,7 +81,9 @@
         "make test",
         "make check",
         "make test-logs",
-        "make test-down"
+        "make test-down",
+        "make test-integration",
+        "make test-browser"
       ]
     }
   }

@@ -238,7 +238,9 @@ def test_in_december_january_is_a_later_month_in_the_future_log():
 @pytest.mark.parametrize(
     ("day", "destination"),
     [
-        pytest.param(date(2026, 10, 30), Destination.daily_log(date(2026, 10, 30)), id="this month"),
+        pytest.param(
+            date(2026, 10, 30), Destination.daily_log(date(2026, 10, 30)), id="this month"
+        ),
         pytest.param(
             date(2027, 1, 4),
             Destination.future_log(date(2027, 1, 1), on=date(2027, 1, 4)),

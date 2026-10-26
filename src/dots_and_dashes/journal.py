@@ -623,6 +623,21 @@ def day_being_planned(now: datetime, timezone: tzinfo, *, night_before: bool = F
     return planning + timedelta(days=1) if night_before else planning
 
 
+# Daily Migration run from this local time until midnight is the night before,
+# planning tomorrow; from midnight until then it is the morning, planning today.
+EVENING_STARTS = time(18, 0)
+
+
+def is_night_before(now: datetime, timezone: tzinfo) -> bool:
+    """Whether a Daily Migration run now is the night before: from 18:00 local time."""
+    return now.astimezone(timezone).time() >= EVENING_STARTS
+
+
+def daily_migration_planning(now: datetime, timezone: tzinfo) -> date:
+    """The day a Daily Migration run now plans: tomorrow in the evening, otherwise today."""
+    return day_being_planned(now, timezone, night_before=is_night_before(now, timezone))
+
+
 def migrate(task: Entry, *, to: Destination, planning: date) -> Migration:
     """Migrate or Schedule an Open Task to a destination.
 
@@ -721,3 +736,56 @@ def move_event(event: Entry, nested_notes: list[Entry], *, on: date) -> tuple[En
         raise MigrationError("only an Event moves by changing its date")
     daily_log_day(event)
     return replace(event, day=on), [replace(note, day=on) for note in nested_notes]
+
+
+# Daily Migration: reviewing the Open Tasks left on earlier days, to complete,
+# migrate, schedule or cancel each. It is optional: nothing happens to a Task
+# until it is decided, so it can be skipped and done any time later.
+
+
+@dataclass(frozen=True)
+class AnchorGroup:
+    """Open Tasks sharing an Anchor; None for the untimed ones at the top of a day."""
+
+    anchor: Entry | None
+    tasks: list[Entry]
+
+
+@dataclass(frozen=True)
+class MigrationDay:
+    """An earlier day's Open Tasks, grouped under their Anchors in Daily Log order."""
+
+    day: date
+    groups: list[AnchorGroup]
+
+
+def _is_open_task(entry: Entry) -> bool:
+    return entry.type is EntryType.TASK and entry.state is TaskState.OPEN
+
+
+def daily_migration(entries: list[Entry], *, planning: date) -> list[MigrationDay]:
+    """The Open Tasks a Daily Migration reviews: those on every Daily Log before
+    the day being planned, oldest day first.
+
+    Entries are given in each Daily Log's manual order. Each day's Open Tasks
+    are grouped under their Anchor, so a missed block is dealt with together;
+    an Open Timed Task leads its own group.
+    """
+    by_day: dict[date, list[Entry]] = {}
+    for entry in entries:
+        if entry.location is Location.DAY and entry.day is not None and entry.day < planning:
+            by_day.setdefault(entry.day, []).append(entry)
+    review = []
+    for day in sorted(by_day):
+        groups: list[AnchorGroup] = []
+        for entry in arrange_daily_log(by_day[day]):
+            if not _is_open_task(entry):
+                continue
+            leader = entry if entry.time is not None else anchor(by_day[day], entry.id)
+            if groups and groups[-1].anchor == leader:
+                groups[-1].tasks.append(entry)
+            else:
+                groups.append(AnchorGroup(anchor=leader, tasks=[entry]))
+        if groups:
+            review.append(MigrationDay(day=day, groups=groups))
+    return review

@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+
+{% block title %}Daily Migration · Dots & Dashes{% endblock %}
+
+{% block content %}
+<nav class="day-nav" aria-label="Logs">
+  <a href="/">← Today</a>
+  <a href="/days/{{ planning.isoformat() }}">{{ planning.strftime("%A") }}'s Daily Log</a>
+</nav>
+
+<main id="daily-migration" data-planning="{{ planning.isoformat() }}" data-night-before="{{ 'true' if night_before else 'false' }}">
+  <h1>Daily Migration</h1>
+  <p>
+    {% if night_before %}The night before: planning tomorrow,{% else %}Planning today,{% endif %}
+    <time datetime="{{ planning.isoformat() }}">{{ planning.strftime("%A, %-d %B") }}</time>.
+    <kbd>x</kbd> complete, <kbd>m</kbd> migrate, <kbd>s</kbd> schedule, <kbd>c</kbd> cancel.
+  </p>
+
+  {% for migration_day in review %}
+  <section aria-labelledby="day-{{ migration_day.day.isoformat() }}">
+    <h2 id="day-{{ migration_day.day.isoformat() }}"><a href="/days/{{ migration_day.day.isoformat() }}"><time datetime="{{ migration_day.day.isoformat() }}">{{ migration_day.day.strftime("%A, %-d %B %Y") }}</time></a></h2>
+    {% for group in migration_day.groups %}
+    {% set anchor = group.anchor %}
+    {% if anchor and anchor not in group.tasks %}
+    <h3 class="anchor">Anchored to <time datetime="{{ anchor.time.strftime('%H:%M') }}">{{ anchor.time.strftime('%H:%M') }}</time> {{ anchor.text }}</h3>
+    {% endif %}
+    <ul id="entries-{{ migration_day.day.isoformat() }}-{{ anchor.id if anchor else 'top' }}" class="entries">
+      {% for entry in group.tasks %}{% include "_entry.html" %}{% endfor %}
+    </ul>
+    {% endfor %}
+  </section>
+  {% else %}
+  <p>No Open Tasks left on earlier days.</p>
+  {% endfor %}
+</main>
+{% endblock %}

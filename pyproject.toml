@@ -1,13 +1,21 @@
 [project]
 name = "dots-and-dashes"
 version = "0.1.0"
-description = "Add your description here"
+description = "A personal, keyboard-first bullet journal"
 readme = "README.md"
 authors = [
     { name = "Clarence Cabang", email = "ckcabang@gmail.com" }
 ]
-requires-python = ">=3.9"
-dependencies = []
+requires-python = ">=3.12"
+dependencies = [
+    "alembic>=1.20.1",
+    "fastapi>=0.162.0",
+    "jinja2>=3.1.6",
+    "psycopg[binary]>=3.3.6",
+    "python-multipart>=0.0.32",
+    "sqlalchemy>=2.1.6",
+    "uvicorn[standard]>=0.54.0",
+]
 
 [project.scripts]
 dots-and-dashes = "dots_and_dashes:main"
@@ -15,3 +23,20 @@ dots-and-dashes = "dots_and_dashes:main"
 [build-system]
 requires = ["uv_build>=0.13.5,<0.14.0"]
 build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "httpx2>=2.13.1,<2.14",
+    "mypy>=2.4.0",
+    "pytest>=9.1.1",
+    "pytest-playwright>=0.10.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["--import-mode=importlib"]
+
+[tool.mypy]
+files = ["src", "tests", "migrations"]
+explicit_package_bases = true
+mypy_path = ["src", "."]

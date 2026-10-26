@@ -1,0 +1,33 @@
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: dots
+      POSTGRES_PASSWORD: dots
+      POSTGRES_DB: dots_and_dashes
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dots -d dots_and_dashes"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
+  app:
+    build: .
+    environment:
+      DATABASE_URL: postgresql+psycopg://dots:dots@db:5432/dots_and_dashes
+      JOURNAL_TIMEZONE: ${JOURNAL_TIMEZONE:-UTC}
+    command: >-
+      sh -c "alembic upgrade head &&
+      exec uvicorn dots_and_dashes.web:create_app --factory --host 0.0.0.0 --port 8000"
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:

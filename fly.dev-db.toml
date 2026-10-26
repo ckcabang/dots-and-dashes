@@ -1,0 +1,36 @@
+# Dev's own Postgres, dots-and-dashes-dev-db (ADR-0003): the official image on
+# one Machine with a 1GB volume. Private only: the app reaches it at
+# dots-and-dashes-dev-db.flycast:5432, and it has no public IP. The superuser
+# password is the POSTGRES_PASSWORD Fly secret. One-time setup, including the
+# first deploy, is scripts/provision-dev; it isn't redeployed on merge.
+app = "dots-and-dashes-dev-db"
+primary_region = "iad"
+
+[build]
+  image = "postgres:17"
+
+[env]
+  POSTGRES_USER = "dots"
+  POSTGRES_DB = "dots_and_dashes"
+  # A subdirectory: initdb refuses the volume's root, which holds lost+found.
+  PGDATA = "/var/lib/postgresql/data/pgdata"
+
+[mounts]
+  source = "pgdata"
+  destination = "/var/lib/postgresql/data"
+
+# Through Flycast, so Fly's proxy starts the database when the app connects and
+# stops it once the app has stopped and its pool's connections are gone.
+[[services]]
+  internal_port = 5432
+  protocol = "tcp"
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[services.ports]]
+    port = 5432
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"

@@ -47,3 +47,15 @@ CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs `make check` on
 | Browser | `tests/browser` | Playwright driving the app container of the test Compose stack |
 
 New migrations: `DATABASE_URL=… uv run alembic revision --autogenerate -m "…"`.
+
+## Deploy
+
+Dev, <https://dots-and-dashes-dev.fly.dev>, always runs `main`: every merge runs [`.github/workflows/deploy-dev.yml`](.github/workflows/deploy-dev.yml), which builds an image tagged with the commit (`registry.fly.io/dots-and-dashes-dev:<sha>`) and deploys it. The release command applies the Alembic migrations before any Machine moves to the new image. Run the workflow from the Actions tab to redeploy `main` by hand, for instance after changing a Fly secret.
+
+Dev is two Fly apps in `iad`: `dots-and-dashes-dev` ([`fly.dev.toml`](fly.dev.toml)) and its own Postgres, `dots-and-dashes-dev-db` ([`fly.dev-db.toml`](fly.dev-db.toml), [ADR-0003](docs/adr/0003-self-run-postgres-on-fly.md)), which has no public IP and is reached at `dots-and-dashes-dev-db.flycast`. Both stop when idle and start on the next request. `DATABASE_URL`, `SESSION_SECRET` and `FLAG_MONTHLY_REVIEW` are Fly secrets (`flyctl secrets list -a dots-and-dashes-dev`), and the workflow deploys with the `FLY_API_TOKEN` GitHub secret, a deploy token for the dev app only.
+
+To set dev up from nothing (apps, volume, secrets, token, first deploy and your User), run the wizard. It needs [`flyctl`](https://fly.io/docs/flyctl/install/) and `gh`, and is safe to re-run:
+
+```sh
+scripts/provision-dev
+```

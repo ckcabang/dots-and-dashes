@@ -4,9 +4,10 @@ its Inbox holds only the Captures it made."""
 from datetime import date
 
 import pytest
-from playwright.sync_api import Page, expect
+from playwright.sync_api import Page, ViewportSize, expect
 
-PHONE = {"width": 390, "height": 844}
+PHONE = ViewportSize(width=390, height=844)
+DESK = ViewportSize(width=1280, height=800)
 
 
 @pytest.fixture
@@ -37,7 +38,7 @@ def test_capturing_on_a_phone_saves_raw_text_to_the_inbox(own_inbox: Page):
 
     # Back at the desk, the Daily Log shows the Inbox count, and nothing was
     # classified on the way.
-    page.set_viewport_size({"width": 1280, "height": 800})
+    page.set_viewport_size(DESK)
     page.goto("/")
     expect(page.get_by_role("link", name="Inbox (2)")).to_be_visible()
     expect(page.locator("#entries > .entry")).to_have_count(0)

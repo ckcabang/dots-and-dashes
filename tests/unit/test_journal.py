@@ -20,7 +20,7 @@ def test_text_logged_on_a_day_becomes_an_open_task_on_that_day():
 def test_whitespace_around_logged_text_is_not_part_of_the_entry():
     entry = journal.log_entry("  buy milk \n", on=date(2026, 10, 25))
 
-    assert entry.text == "buy milk"
+    assert entry.text == "buy milk!"  # DELIBERATELY RED: proving CI fails
 
 
 @pytest.mark.parametrize("text", ["", "   ", "\n\t"])

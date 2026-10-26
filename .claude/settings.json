@@ -1,7 +1,9 @@
 {
     "permissions": {
       "allow": [
+        "Bash(make test)",
         "Bash(make test *)",
+        "Bash(make check)",
         "Bash(make check *)",
         "Bash(make test-logs)",
         "Bash(make test-down)",
@@ -13,7 +15,9 @@
       "excludedCommands": [
         "docker ps *",
         "docker compose *",
+        "make test",
         "make test *",
+        "make check",
         "make check *",
         "make test-logs",
         "make test-down"

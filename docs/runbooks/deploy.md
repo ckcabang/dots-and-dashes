@@ -35,6 +35,8 @@ A rollback across a migration works as long as migrations only add to the schema
 
 ## Secrets it needs
 
+The prod app's own Fly secrets are `DATABASE_URL`, `SESSION_SECRET`, `FLAG_MONTHLY_REVIEW`, and the Grafana Cloud `OTEL_EXPORTER_OTLP_ENDPOINT` and `OTEL_EXPORTER_OTLP_HEADERS`. All are set by `scripts/provision-prod`. A deploy and a rollback both leave them as they are.
+
 GitHub secrets, both set by the provisioning wizards:
 
 - `FLY_PROD_API_TOKEN`: a deploy token for `dots-and-dashes` only; it pushes to prod's repository and deploys.

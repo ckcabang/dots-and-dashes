@@ -1,6 +1,7 @@
 # The dev app, dots-and-dashes-dev: deployed on every merge to main by
 # .github/workflows/deploy-dev.yml. One-time setup is scripts/provision-dev.
-# Secrets (DATABASE_URL, SESSION_SECRET, FLAG_MONTHLY_REVIEW) are Fly secrets.
+# Secrets (DATABASE_URL, SESSION_SECRET, FLAG_MONTHLY_REVIEW, and the Grafana
+# Cloud OTEL_EXPORTER_OTLP_ENDPOINT and OTEL_EXPORTER_OTLP_HEADERS) are Fly secrets.
 app = "dots-and-dashes-dev"
 primary_region = "iad"
 
@@ -13,6 +14,8 @@ primary_region = "iad"
 
 [env]
   SECURE_COOKIES = "on"
+  # Tells dev's telemetry apart from prod's: its signals' job is dev/dots-and-dashes.
+  DEPLOYMENT_ENVIRONMENT = "dev"
 
 # Dev stops when idle and starts on the next request.
 [http_service]

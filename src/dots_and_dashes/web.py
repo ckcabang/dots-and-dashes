@@ -20,6 +20,7 @@ from starlette.types import ASGIApp
 
 from dots_and_dashes import accounts, journal, persistence
 from dots_and_dashes.settings import Settings
+from dots_and_dashes.telemetry import RequestTelemetry, Telemetry
 
 Clock = Callable[[], datetime]
 
@@ -85,7 +86,7 @@ class MigrationIn(BaseModel):
     The server decides the day being planned; plan overrides it.
     """
 
-    to: Literal["day", "month", "future", "date"]
+    to: journal.DestinationChoice
     on: date | None = Field(None, alias="date")
     month: str | None = Field(None, pattern=r"^\d{4}-\d{2}$")
     plan: Plan | None = None
@@ -115,6 +116,15 @@ class FutureEntryIn(BaseModel):
     text: str
     month: str = Field(pattern=r"^\d{4}-\d{2}$")
     on: date | None = Field(None, alias="date")
+
+
+class FutureEntryForm(BaseModel):
+    """FutureEntryIn as the Future Log page sends it: the month and date as
+    typed, read once the form is in, so an impossible one is refused on the page."""
+
+    text: str
+    month: str
+    on: str | None = Field(None, alias="date")
 
 
 class CalendarDayOut(BaseModel):
@@ -196,11 +206,12 @@ class TriageIn(BaseModel):
     """Where to place a Capture, and its text as adjusted.
 
     to is a Daily Log ("day", with date, or else today's), the current
-    month's task list ("month"), or the Future Log ("future", with month and
-    an optional date). Without text, the Capture's own text is read.
+    month's task list ("month"), the Future Log ("future", with month and an
+    optional date), or a date ("date"), which lands on its Daily Log this
+    month or in the Future Log. Without text, the Capture's own text is read.
     """
 
-    to: Literal["day", "month", "future"]
+    to: journal.DestinationChoice
     text: str | None = None
     on: date | None = Field(None, alias="date")
     month: str | None = Field(None, pattern=r"^\d{4}-\d{2}$")
@@ -210,7 +221,7 @@ class TriageForm(BaseModel):
     """TriageIn as the Triage page sends it: the date and month as typed,
     read once the form is in, so an impossible one is refused on the page."""
 
-    to: Literal["day", "month", "future"]
+    to: journal.DestinationChoice
     text: str | None = None
     on: str | None = Field(None, alias="date")
     month: str | None = None
@@ -475,7 +486,7 @@ def _triage(
     session: Session,
     capture_id: int,
     *,
-    to: Literal["day", "month", "future"],
+    to: journal.DestinationChoice,
     on: date | None,
     month: date | None,
     text: str | None,
@@ -531,12 +542,23 @@ REFUSED_AS_INVALID: tuple[type[ValueError], ...] = (
 )
 
 
-def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -> FastAPI:
+# The key journey, logging an Entry on a Daily Log from the page or the API:
+# the requests the save metrics count and time.
+ENTRY_SAVES = {("POST", "/entries"), ("POST", "/api/entries")}
+
+
+def create_app(
+    settings: Settings | None = None,
+    clock: Clock = _system_clock,
+    telemetry: Telemetry | None = None,
+) -> FastAPI:
     settings = settings or Settings.from_env()
+    telemetry = telemetry or Telemetry.from_settings(settings)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         engine = create_engine(settings.database_url, pool_pre_ping=True)
+        telemetry.instrument_engine(engine)
         app.state.sessionmaker = sessionmaker(engine)
         yield
         engine.dispose()
@@ -553,6 +575,9 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
         same_site="lax",
         https_only=settings.secure_cookies,
     )
+    # Outermost, so its span covers every other middleware and the route.
+    app.add_middleware(RequestTelemetry, telemetry=telemetry, entry_saves=ENTRY_SAVES)
+    app.state.telemetry = telemetry
     app.mount("/static", StaticFiles(directory=PACKAGE_DIR / "static"), name="static")
 
     @app.exception_handler(LoginRequiredError)
@@ -654,7 +679,7 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
         day: Annotated[date | None, Form()] = None,
     ) -> Response:
         on = day or today
-        _add(session, journal.log_entry(text, on=on))
+        request.app.state.telemetry.entry_saved(_add(session, journal.log_entry(text, on=on)))
         if "HX-Request" in request.headers:
             # The whole Daily Log, since a Timed Entry may land anywhere in it.
             return _entries_fragment(request, session, on, status_code=201)
@@ -729,8 +754,12 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
         return Response(status_code=200)
 
     @app.post("/api/entries", status_code=201)
-    def create_entry(body: NewEntryIn, session: SessionDep, today: TodayDep) -> EntryOut:
-        return _out(_add(session, journal.log_entry(body.text, on=body.day or today)))
+    def create_entry(
+        request: Request, body: NewEntryIn, session: SessionDep, today: TodayDep
+    ) -> EntryOut:
+        entry = _add(session, journal.log_entry(body.text, on=body.day or today))
+        request.app.state.telemetry.entry_saved(entry)
+        return _out(entry)
 
     @app.post("/api/entries/{entry_id}/move")
     def move_entry(entry_id: int, body: MoveIn, session: SessionDep) -> DailyLogOut:
@@ -943,8 +972,14 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
             _pull_from_future_log(session, today)
             return _monthly_review_out(persistence.monthly_review(session, today))
 
-    @app.get("/future", response_class=HTMLResponse)
-    def future_log_page(request: Request, session: SessionDep, today: TodayDep) -> Response:
+    def render_future_log(
+        request: Request,
+        session: Session,
+        today: date,
+        *,
+        typed: FutureEntryForm | None = None,
+        refused: str | None = None,
+    ) -> Response:
         return templates.TemplateResponse(
             request,
             "future_log.html",
@@ -952,22 +987,35 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
                 "today": today,
                 "first_month": journal.next_month(journal.month_of(today)),
                 "future_log": persistence.future_log(session, today),
+                "typed": typed,
+                "refused": refused,
             },
+            status_code=422 if refused else 200,
         )
+
+    @app.get("/future", response_class=HTMLResponse)
+    def future_log_page(request: Request, session: SessionDep, today: TodayDep) -> Response:
+        return render_future_log(request, session, today)
 
     @app.post("/future/entries")
     def add_to_future_log(
-        text: Annotated[str, Form()],
-        month: Annotated[str, Form(pattern=r"^\d{4}-\d{2}$")],
+        request: Request,
+        form: Annotated[FutureEntryForm, Form()],
         session: SessionDep,
         today: TodayDep,
-        # An empty date field reads as no date.
-        on: Annotated[date | None, Form(alias="date")] = None,
     ) -> Response:
-        _add(
-            session,
-            journal.log_future_entry(text, month=_parse_month(month), on=on, today=today),
-        )
+        try:
+            # An empty date field reads as no date.
+            new_entry = journal.log_future_entry(
+                form.text,
+                month=_parse_month(form.month),
+                on=_optional_date(form.on),
+                today=today,
+            )
+        except REFUSED_AS_INVALID as refused:
+            # Refused before anything is written.
+            return render_future_log(request, session, today, typed=form, refused=str(refused))
+        _add(session, new_entry)
         return RedirectResponse("/future", status_code=303)
 
     @app.get("/api/future-log")

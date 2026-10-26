@@ -85,6 +85,22 @@ def test_triage_places_a_capture_in_the_future_log_with_an_optional_date(client,
     assert _read(client, "/api/inbox")["count"] == 0
 
 
+def test_triage_to_a_date_lands_on_its_daily_log_this_month_or_in_the_future_log(client):
+    soon = _capture(client, "o dentist")
+    later = _capture(client, "o conference")
+
+    for capture_id, on in [(soon, "2026-10-28"), (later, "2027-03-03")]:
+        triaged = client.post(
+            f"/api/captures/{capture_id}/triage", json={"to": "date", "date": on}
+        )
+        assert triaged.status_code == 201
+
+    assert _texts(client.get("/api/daily-logs/2026-10-28").json()["entries"]) == ["dentist"]
+    future_log = client.get("/api/future-log").json()
+    [march] = [bucket for bucket in future_log["months"] if bucket["month"] == "2027-03"]
+    assert [(e["text"], e["day"]) for e in march["entries"]] == [("conference", "2027-03-03")]
+
+
 def test_the_inbox_shows_what_triage_suggests_for_each_capture(client):
     _capture(client, "!- 2:30pm idea for the garden")
 

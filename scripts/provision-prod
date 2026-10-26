@@ -218,7 +218,7 @@ run_wizard() {
 
 cd "$(dirname "$0")/.."
 
-TOTAL_STAGES=10
+TOTAL_STAGES=11
 
 banner "Prod on Fly.io: dots-and-dashes"
 
@@ -299,6 +299,25 @@ elif confirm "Turn the Monthly Review flag on in prod?"; then
   flyctl secrets set --stage -a "$APP" FLAG_MONTHLY_REVIEW=on
 else
   flyctl secrets set --stage -a "$APP" FLAG_MONTHLY_REVIEW=off
+fi
+pause
+
+stage "Telemetry to Grafana Cloud"
+say "The save alerts read prod's telemetry, sent over OTLP to Grafana Cloud."
+say "Without these two secrets prod runs the same but exports nothing."
+if has_secret "$APP" OTEL_EXPORTER_OTLP_ENDPOINT && has_secret "$APP" OTEL_EXPORTER_OTLP_HEADERS; then
+  note "OTEL_EXPORTER_OTLP_ENDPOINT and OTEL_EXPORTER_OTLP_HEADERS are already set."
+elif confirm "Set them now? (Same Grafana Cloud stack as dev is fine.)"; then
+  open_url "https://grafana.com/auth/sign-in"
+  step "Open your stack's OpenTelemetry tile → Configure, and generate a token."
+  step "It shows OTEL_EXPORTER_OTLP_ENDPOINT and OTEL_EXPORTER_OTLP_HEADERS."
+  ask OTLP_ENDPOINT "OTEL_EXPORTER_OTLP_ENDPOINT (https://otlp-gateway-<zone>.grafana.net/otlp):"
+  ask_secret OTLP_HEADERS "OTEL_EXPORTER_OTLP_HEADERS (Authorization=Basic …, hidden):"
+  printf 'OTEL_EXPORTER_OTLP_ENDPOINT=%s\nOTEL_EXPORTER_OTLP_HEADERS=%s\n' "$OTLP_ENDPOINT" "$OTLP_HEADERS" \
+    | flyctl secrets import --stage -a "$APP"
+  unset OTLP_HEADERS
+else
+  note "Skipped: set both later with flyctl secrets set -a $APP."
 fi
 pause
 

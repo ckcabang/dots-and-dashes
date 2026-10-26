@@ -176,6 +176,17 @@ def test_the_daily_log_page_shows_signifiers_type_and_time(app_client):
     assert "dentist" in page.text
 
 
+def test_only_entries_with_a_task_state_carry_a_state_class(app_client):
+    with app_client() as client:
+        for text in ["o dinner", "- idea", "buy milk"]:
+            client.post("/entries", data={"text": text})
+        page = client.get("/").text
+
+    assert "entry--None" not in page
+    assert page.count('class="entry entry--task entry--open"') == 1
+    assert 'class="entry entry--event"' in page and 'class="entry entry--note"' in page
+
+
 def _log_texts(client, *texts: str) -> dict[str, int]:
     ids = {}
     for text in texts:

@@ -113,6 +113,16 @@ def test_acting_on_an_entry_that_does_not_exist_is_not_found(client, method, pat
     assert client.request(method, path).status_code == 404
 
 
+@pytest.mark.parametrize("path", ["/api/entries/{id}/finish", "/entries/{id}/finish"])
+def test_a_task_state_change_that_does_not_exist_is_refused_not_an_entry_not_found(client, path):
+    task = _log(client)
+
+    refused = client.post(path.format(id=task))
+
+    assert refused.status_code == 422
+    assert _todays_entries(client) == [(task, "open", "buy milk")]
+
+
 def test_editing_an_entry_that_does_not_exist_is_not_found(client):
     assert client.patch("/api/entries/999", json={"text": "x"}).status_code == 404
 

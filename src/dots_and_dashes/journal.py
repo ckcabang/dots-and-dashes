@@ -164,21 +164,7 @@ class Entry:
 
 def log_entry(text: str, *, on: date) -> NewEntry:
     """Turn text typed into a Daily Log's input box into an Entry on that day."""
-    # Only leading whitespace goes before the Prefix is read: a trailing space
-    # is what makes ". " a Prefix with no text rather than a Task called ".".
-    parsed = read_prefix(text.lstrip())
-    text = parsed.text.strip()
-    if not text:
-        raise BlankEntryError("an Entry needs some text")
-    return NewEntry(
-        type=parsed.type,
-        state=TaskState.OPEN if parsed.type is EntryType.TASK else None,
-        priority=parsed.priority,
-        inspiration=parsed.inspiration,
-        time=parsed.time,
-        text=text,
-        day=on,
-    )
+    return _new_entry(_read_entry(text), location=Location.DAY, day=on, month=None)
 
 
 class TimedEntryMoveError(ValueError):
@@ -324,6 +310,12 @@ def change_time(entries: list[Entry], entry_id: int, *, to: time) -> list[Entry]
     return arrange_daily_log(_in_order(top, [*others, moved]) + nested)
 
 
+def is_draggable(entry: Entry) -> bool:
+    """Whether an Entry is reordered by keyboard or drag: an untimed one on a
+    Daily Log that isn't a Nested Note. The others move with their time or parent."""
+    return entry.location is Location.DAY and entry.time is None and entry.parent_id is None
+
+
 def move_entry(entries: list[Entry], entry_id: int, *, to: int) -> list[Entry]:
     """Move an untimed Entry to index `to` of the rest of the Daily Log, by
     keyboard or drag; its Nested Notes go with it.
@@ -451,6 +443,11 @@ def next_month(month: date) -> date:
     return month.replace(month=month.month + 1)
 
 
+def previous_month(month: date) -> date:
+    """The month before a month, rolling January back into December."""
+    return month_of(month_of(month) - timedelta(days=1))
+
+
 def has_monthly_log(month: date, *, today: date) -> bool:
     """Only the current and past months have a Monthly Log; later ones live in the Future Log."""
     return month_of(month) <= month_of(today)
@@ -458,6 +455,8 @@ def has_monthly_log(month: date, *, today: date) -> bool:
 
 def _read_entry(text: str) -> ParsedEntry:
     """Read typed text with the Prefix rules, refusing it if no text is left."""
+    # Only leading whitespace goes before the Prefix is read: a trailing space
+    # is what makes ". " a Prefix with no text rather than a Task called ".".
     parsed = read_prefix(text.lstrip())
     text = parsed.text.strip()
     if not text:

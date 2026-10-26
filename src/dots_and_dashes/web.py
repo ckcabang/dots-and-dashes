@@ -6,7 +6,7 @@ from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from typing import Annotated, Literal
 
-from fastapi import Depends, FastAPI, Form, HTTPException, Path as PathParam, Request
+from fastapi import Depends, FastAPI, Form, HTTPException, Path as PathParam, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -22,6 +22,7 @@ Clock = Callable[[], datetime]
 PACKAGE_DIR = Path(__file__).parent
 templates = Jinja2Templates(directory=PACKAGE_DIR / "templates")
 templates.env.filters["as_typed"] = journal.as_typed
+templates.env.tests["draggable"] = journal.is_draggable
 
 
 def _system_clock() -> datetime:
@@ -180,8 +181,10 @@ SessionDep = Annotated[Session, Depends(_session, scope="function")]
 TodayDep = Annotated[date, Depends(_today)]
 MonthDep = Annotated[date, Depends(_month_param)]
 
-# The Task State changes the keyboard and the API can ask for, by URL name.
-TASK_STATE_CHANGES: dict[str, Callable[[journal.Entry], journal.Entry]] = {
+# The Task State changes the keyboard and the API can ask for, by URL name;
+# any other name is refused as invalid.
+TaskStateChange = Literal["complete", "cancel", "reopen"]
+TASK_STATE_CHANGES: dict[TaskStateChange, Callable[[journal.Entry], journal.Entry]] = {
     "complete": journal.complete,
     "cancel": journal.cancel,
     "reopen": journal.reopen,
@@ -201,10 +204,10 @@ def _add(session: Session, new_entry: journal.NewEntry) -> journal.Entry:
     return entry
 
 
-def _change_task_state(session: Session, entry_id: int, change: str) -> journal.Entry:
-    act = TASK_STATE_CHANGES.get(change)
-    if act is None:
-        raise persistence.EntryNotFoundError(f"no Task State change {change!r}")
+def _change_task_state(
+    session: Session, entry_id: int, change: TaskStateChange
+) -> journal.Entry:
+    act = TASK_STATE_CHANGES[change]
     return persistence.save_entry(session, act(persistence.get_entry(session, entry_id)))
 
 
@@ -308,6 +311,18 @@ def _rearrange(
     return day
 
 
+# Journal rules that refuse a request, answered 422 with the reason.
+REFUSED_AS_INVALID: tuple[type[ValueError], ...] = (
+    journal.BlankEntryError,
+    journal.PlacementError,
+    journal.MigrationError,
+    journal.TimedEntryMoveError,
+    journal.NestedNoteMoveError,
+    journal.UntimedEntryError,
+    journal.NestingError,
+)
+
+
 def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -> FastAPI:
     settings = settings or Settings.from_env()
 
@@ -323,31 +338,15 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
     app.state.clock = clock
     app.mount("/static", StaticFiles(directory=PACKAGE_DIR / "static"), name="static")
 
-    @app.exception_handler(journal.BlankEntryError)
-    def refuse_blank_entry(request: Request, exc: journal.BlankEntryError) -> Response:
+    def refuse(request: Request, exc: Exception) -> Response:
         return JSONResponse({"detail": str(exc)}, status_code=422)
 
-    @app.exception_handler(journal.PlacementError)
-    def refuse_misplaced_entry(request: Request, exc: journal.PlacementError) -> Response:
-        return JSONResponse({"detail": str(exc)}, status_code=422)
+    for refused in REFUSED_AS_INVALID:
+        app.add_exception_handler(refused, refuse)
 
     def require_monthly_log(month: date, today: date) -> None:
         if not journal.has_monthly_log(month, today=today):
             raise HTTPException(404, "months after the current one have no Monthly Log")
-
-    @app.exception_handler(journal.MigrationError)
-    def refuse_migration(request: Request, exc: journal.MigrationError) -> Response:
-        return JSONResponse({"detail": str(exc)}, status_code=422)
-
-    @app.exception_handler(journal.TimedEntryMoveError)
-    @app.exception_handler(journal.NestedNoteMoveError)
-    @app.exception_handler(journal.UntimedEntryError)
-    def refuse_reordering(request: Request, exc: ValueError) -> Response:
-        return JSONResponse({"detail": str(exc)}, status_code=422)
-
-    @app.exception_handler(journal.NestingError)
-    def refuse_nesting(request: Request, exc: journal.NestingError) -> Response:
-        return JSONResponse({"detail": str(exc)}, status_code=422)
 
     @app.exception_handler(journal.TaskStateError)
     def refuse_task_state_change(request: Request, exc: journal.TaskStateError) -> Response:
@@ -377,8 +376,8 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
         return render_daily_log(request, session, today)
 
     @app.get("/days")
-    def go_to_date(date: date) -> Response:
-        return RedirectResponse(f"/days/{date.isoformat()}", status_code=303)
+    def go_to_date(on: Annotated[date, Query(alias="date")]) -> Response:
+        return RedirectResponse(f"/days/{on.isoformat()}", status_code=303)
 
     @app.get("/days/{day}", response_class=HTMLResponse)
     def daily_log_page(request: Request, day: date, session: SessionDep) -> Response:
@@ -447,7 +446,7 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
 
     @app.post("/entries/{entry_id}/{change}")
     def change_task_state_on_page(
-        request: Request, entry_id: int, change: str, session: SessionDep
+        request: Request, entry_id: int, change: TaskStateChange, session: SessionDep
     ) -> Response:
         return _entry_fragment(request, _change_task_state(session, entry_id, change))
 
@@ -468,8 +467,7 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
 
     @app.post("/api/entries", status_code=201)
     def create_entry(body: NewEntryIn, session: SessionDep, today: TodayDep) -> EntryOut:
-        entry = _add(session, journal.log_entry(body.text, on=body.day or today))
-        return EntryOut.model_validate(entry, from_attributes=True)
+        return _out(_add(session, journal.log_entry(body.text, on=body.day or today)))
 
     @app.post("/api/entries/{entry_id}/move")
     def move_entry(entry_id: int, body: MoveIn, session: SessionDep) -> DailyLogOut:
@@ -491,11 +489,11 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
 
     @app.post("/api/entries/{entry_id}/nest")
     def nest_entry(entry_id: int, session: SessionDep) -> EntryOut:
-        return EntryOut.model_validate(_nest(session, entry_id), from_attributes=True)
+        return _out(_nest(session, entry_id))
 
     @app.post("/api/entries/{entry_id}/un-nest")
     def un_nest_entry(entry_id: int, session: SessionDep) -> EntryOut:
-        return EntryOut.model_validate(_un_nest(session, entry_id), from_attributes=True)
+        return _out(_un_nest(session, entry_id))
 
     @app.post("/api/entries/{entry_id}/migrate")
     def migrate_entry(
@@ -509,14 +507,14 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
         return _out(_move_event(session, entry_id, body.on))
 
     @app.post("/api/entries/{entry_id}/{change}")
-    def change_task_state(entry_id: int, change: str, session: SessionDep) -> EntryOut:
-        entry = _change_task_state(session, entry_id, change)
-        return EntryOut.model_validate(entry, from_attributes=True)
+    def change_task_state(
+        entry_id: int, change: TaskStateChange, session: SessionDep
+    ) -> EntryOut:
+        return _out(_change_task_state(session, entry_id, change))
 
     @app.patch("/api/entries/{entry_id}")
     def edit_entry(entry_id: int, body: EditedEntryIn, session: SessionDep) -> EntryOut:
-        entry = _edit(session, entry_id, body.text)
-        return EntryOut.model_validate(entry, from_attributes=True)
+        return _out(_edit(session, entry_id, body.text))
 
     @app.delete("/api/entries/{entry_id}", status_code=204)
     def delete_entry(entry_id: int, session: SessionDep) -> Response:
@@ -526,10 +524,7 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
     def daily_log_out(session: Session, day: date) -> DailyLogOut:
         return DailyLogOut(
             date=day,
-            entries=[
-                EntryOut.model_validate(entry, from_attributes=True)
-                for entry in persistence.entries_on(session, day)
-            ],
+            entries=[_out(entry) for entry in persistence.entries_on(session, day)],
         )
 
     @app.get("/api/daily-logs/today")
@@ -558,7 +553,7 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
             {
                 "today": today,
                 "month": month,
-                "previous_month": (month - timedelta(days=1)).replace(day=1),
+                "previous_month": journal.previous_month(month),
                 "next_month": next_month
                 if journal.has_monthly_log(next_month, today=today)
                 else None,

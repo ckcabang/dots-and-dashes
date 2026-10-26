@@ -381,6 +381,18 @@ def test_in_december_january_is_the_first_month_of_the_future_log():
     assert journal.next_month(date(2026, 12, 1)) == date(2027, 1, 1)
 
 
+@pytest.mark.parametrize(
+    ("month", "previous"),
+    [
+        (date(2026, 10, 1), date(2026, 9, 1)),
+        (date(2026, 3, 1), date(2026, 2, 1)),
+        (date(2027, 1, 1), date(2026, 12, 1)),
+    ],
+)
+def test_the_month_before_a_month_rolls_january_back_into_december(month, previous):
+    assert journal.previous_month(month) == previous
+
+
 def test_text_logged_on_a_monthly_log_goes_on_that_months_task_list():
     entry = journal.log_month_entry(
         "*. renew passport", month=date(2026, 10, 1), today=date(2026, 10, 25)
@@ -705,6 +717,17 @@ def test_a_timed_entry_cannot_be_dragged():
 
     with pytest.raises(journal.TimedEntryMoveError):
         journal.move_entry(daily_log, _by_text(daily_log, "lunch").id, to=0)
+
+
+def test_only_an_untimed_entry_on_a_daily_log_that_is_not_a_nested_note_is_draggable():
+    untimed = _stored(1, "buy milk", None)
+
+    assert journal.is_draggable(untimed)
+    assert not journal.is_draggable(_stored(2, "standup", time(9, 30)))
+    assert not journal.is_draggable(replace(untimed, parent_id=3))
+    assert not journal.is_draggable(
+        replace(untimed, location=journal.Location.MONTH, day=None, month=date(2026, 10, 1))
+    )
 
 
 def test_an_untimed_entry_added_to_a_daily_log_goes_to_the_bottom():

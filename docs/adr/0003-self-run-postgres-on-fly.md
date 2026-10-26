@@ -1,0 +1,3 @@
+# Postgres runs on our own Fly Machines, not Fly Managed Postgres
+
+Each environment (dev and prod) runs the official Postgres image on its own small Fly Machine with a 1GB volume. That costs about $2–3 a month per database, while Managed Postgres starts at $38 a month per cluster, or about $80 for two environments. That's far too much for a single-user course project. In exchange we give up high availability, managed backups and the built-in connection pooler. We rely on Fly's automatic daily volume snapshots for backups, and on the app's own SQLAlchemy pool. That pool is also what the "DB connection pool exhausted" incident scenario turns down. If the journal ever needs real durability guarantees, we can move to Managed Postgres with a `pg_dump`/restore.

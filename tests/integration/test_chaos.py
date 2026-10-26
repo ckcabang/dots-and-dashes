@@ -31,6 +31,12 @@ def test_an_injected_failure_fails_the_save_and_is_counted_as_failed(settings, s
         assert client.get("/api/daily-logs/today").json()["entries"] == []
     (saves,) = signals.points()["entry.saves"]
     assert (dict(saves.attributes), saves.value) == ({"outcome": "failed"}, 1)
+    # The runbook names this type, so a staged failure is told from a real one.
+    error_type = "dots_and_dashes.chaos.InjectedSaveFailure"
+    request = signals.server_span("POST", "/api/entries")
+    assert request.attributes and request.attributes["error.type"] == error_type
+    (failed,) = [r for r in signals.logs() if r.log_record.body == "Entry save failed"]
+    assert failed.log_record.attributes and failed.log_record.attributes["error.type"] == error_type
 
 
 def test_the_error_rate_is_read_from_the_environment_and_fails_that_share_of_saves(

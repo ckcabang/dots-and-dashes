@@ -19,7 +19,17 @@ To watch a staged incident on dev, run the same queries with `job="dev/dots-and-
 
 The On-call agent (`.claude/agents/on-call.md`) applies only the three remedies below (ADR-0002). Anything else goes to the human through an incident issue labelled `ready-for-human`.
 
-Stage each scenario on dev with the chaos switch (`CHAOS_SAVE_ERROR_RATE`, `CHAOS_SAVE_LATENCY_MS`) or the flag and pool settings below. The incident issues the agent files are the evidence it works.
+Stage each scenario on dev with the chaos switch or the flag and pool settings below. The incident issues the agent files are the evidence it works.
+
+## Staging an incident
+
+Set these as Fly secrets on dev (`fly secrets set -a dots-and-dashes-dev NAME=value`, which restarts the app) and unset them to end the incident. Unset, the app behaves exactly as without them.
+
+- **`CHAOS_SAVE_ERROR_RATE`**: the share of Entry saves to fail, from 0 to 1. The failures are spread evenly, not drawn at random: `0.25` fails exactly every fourth save on each Machine. A failed save answers 500, counts as `outcome="failed"`, and its span and `Entry save failed` log carry `error.type="dots_and_dashes.chaos.InjectedSaveFailure"`.
+- **`CHAOS_SAVE_LATENCY_MS`**: milliseconds to slow every Entry save by, while it holds its database connection. It shows in `entry.save.duration` and as the time between the save's checkout and its first statement.
+- **`DB_POOL_SIZE`**: the most database connections each Machine holds. Unset, SQLAlchemy's default applies: 5, plus 10 overflow. Set, it is the hard limit, with no overflow, so `DB_POOL_SIZE=1` with `CHAOS_SAVE_LATENCY_MS=2000` and a few saves at once exhausts the pool.
+
+Every wait for a pooled connection is a `db.connection.checkout` span under the request's span. It carries `db.client.connection.max`, the most connections the app may hold, and `db.client.connection.used`, how many it held when the checkout began.
 
 ## Bad deploy → roll back
 
@@ -35,6 +45,6 @@ Stage each scenario on dev with the chaos switch (`CHAOS_SAVE_ERROR_RATE`, `CHAO
 
 ## DB connection pool exhausted → raise the pool size and redeploy
 
-- **Signs**: save latency climbs while the database itself is healthy. In a slow save's trace, the time goes to an unlabelled gap before the first database span, which is the wait for a connection. Statements have spans but connection checkout has none yet.
+- **Signs**: save latency climbs while the database itself is healthy. In a slow save's trace, the time goes to a long `db.connection.checkout` span whose `db.client.connection.used` equals its `db.client.connection.max`: every connection was in use, so the save waited for one. The statements after it are fast. A checkout that waits out the pool's 30s timeout fails with `error.type="sqlalchemy.exc.TimeoutError"`.
 - **Remedy**: raise `DB_POOL_SIZE` as a Fly secret and redeploy.
 - **Cleared when**: p95 save latency falls back under 1s.

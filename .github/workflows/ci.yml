@@ -1,0 +1,32 @@
+# Gate every pull request on `make check`: mypy, then the unit, integration
+# and browser suites against the test Compose stack (Postgres + app container).
+name: CI
+
+on:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10
+
+      # `make setup`, plus the system libraries Chromium needs on a bare runner.
+      - name: Install dependencies
+        run: |
+          uv sync --locked
+          uv run playwright install --with-deps chromium
+
+      - name: Typecheck and test
+        run: make check
+
+      - name: Show test stack logs
+        if: failure()
+        run: COMPOSE_PROJECT_NAME=dots-and-dashes-test docker compose logs

@@ -21,6 +21,8 @@ make typecheck  # mypy
 make check      # typecheck, then test
 ```
 
+CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs `make check` on every pull request.
+
 `make test` builds and starts a separate Compose project, `dots-and-dashes-test` (Postgres on port 55432, app on 58000, its own volume), so your dev journal is never touched. Integration tests run against a `dots_and_dashes_test` database on that Postgres, which they create and migrate. Browser tests drive the stack's app container. To point the suites elsewhere, set `TEST_DATABASE_URL` (a SQLAlchemy URL naming a `*_test` database) and `BASE_URL`. Stop the stack with `COMPOSE_PROJECT_NAME=dots-and-dashes-test docker compose down`.
 
 | Suite | Path | Seam |

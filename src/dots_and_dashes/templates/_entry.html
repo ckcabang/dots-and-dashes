@@ -1,1 +1,4 @@
-<li class="entry entry--{{ entry.type }} entry--{{ entry.state }}"><span class="state-marker" aria-hidden="true">•</span>{{ entry.text }}</li>
+{%- set markers = {"open": "•", "completed": "×", "cancelled": "•"} -%}
+<li id="entry-{{ entry.id }}" class="entry entry--{{ entry.type }} entry--{{ entry.state }}"
+    tabindex="-1" data-id="{{ entry.id }}" data-state="{{ entry.state or '' }}"
+    data-typed="{{ entry | as_typed }}"><span class="state-marker" aria-hidden="true">{{ markers.get(entry.state, "•") }}</span><span class="entry-text">{{ entry.text }}</span></li>

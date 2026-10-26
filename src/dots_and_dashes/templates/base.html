@@ -5,12 +5,16 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Dots & Dashes{% endblock %}</title>
   <script src="/static/htmx.min.js" defer></script>
+  <script src="/static/keyboard.js" defer></script>
   <style>
     body { font-family: system-ui, sans-serif; max-width: 40rem; margin: 2rem auto; padding: 0 1rem; }
     input[name="text"] { width: 100%; font-size: 1.1rem; padding: 0.5rem; box-sizing: border-box; }
     .entries { list-style: none; padding: 0; }
     .entry { padding: 0.25rem 0; }
     .state-marker { display: inline-block; width: 1.5rem; }
+    .entry:focus { outline: none; background: #eef; }
+    .entry--cancelled .entry-text { text-decoration: line-through; color: #777; }
+    .entry input { font: inherit; width: 100%; box-sizing: border-box; }
   </style>
 </head>
 <body>

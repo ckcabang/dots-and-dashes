@@ -35,13 +35,22 @@ class EntryRow(Base):
         )
 
 
+class EntryNotFoundError(LookupError):
+    """Raised when no stored Entry has the id asked for."""
+
+
+def _columns(entry: journal.NewEntry | journal.Entry) -> dict[str, object]:
+    """The stored columns for an Entry; adding and saving both write these."""
+    return {
+        "type": entry.type,
+        "state": entry.state,
+        "text": entry.text,
+        "day": entry.day,
+    }
+
+
 def add_entry(session: Session, new_entry: journal.NewEntry) -> journal.Entry:
-    row = EntryRow(
-        type=new_entry.type,
-        state=new_entry.state,
-        text=new_entry.text,
-        day=new_entry.day,
-    )
+    row = EntryRow(**_columns(new_entry))
     session.add(row)
     session.flush()
     return row.to_entry()
@@ -52,3 +61,29 @@ def entries_on(session: Session, day: date) -> list[journal.Entry]:
         select(EntryRow).where(EntryRow.day == day).order_by(EntryRow.id)
     )
     return [row.to_entry() for row in rows]
+
+
+def _row(session: Session, entry_id: int) -> EntryRow:
+    row = session.get(EntryRow, entry_id)
+    if row is None:
+        raise EntryNotFoundError(f"no Entry {entry_id}")
+    return row
+
+
+def get_entry(session: Session, entry_id: int) -> journal.Entry:
+    return _row(session, entry_id).to_entry()
+
+
+def save_entry(session: Session, entry: journal.Entry) -> journal.Entry:
+    """Store the changes to an existing Entry."""
+    row = _row(session, entry.id)
+    for column, value in _columns(entry).items():
+        setattr(row, column, value)
+    session.flush()
+    return row.to_entry()
+
+
+def delete_entry(session: Session, entry_id: int) -> None:
+    """Delete an Entry permanently."""
+    session.delete(_row(session, entry_id))
+    session.flush()

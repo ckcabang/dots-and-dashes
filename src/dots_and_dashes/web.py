@@ -21,6 +21,7 @@ Clock = Callable[[], datetime]
 
 PACKAGE_DIR = Path(__file__).parent
 templates = Jinja2Templates(directory=PACKAGE_DIR / "templates")
+templates.env.filters["as_typed"] = journal.as_typed
 
 
 def _system_clock() -> datetime:
@@ -28,6 +29,10 @@ def _system_clock() -> datetime:
 
 
 class NewEntryIn(BaseModel):
+    text: str
+
+
+class EditedEntryIn(BaseModel):
     text: str
 
 
@@ -57,6 +62,29 @@ def _today(request: Request) -> date:
 SessionDep = Annotated[Session, Depends(_session)]
 TodayDep = Annotated[date, Depends(_today)]
 
+# The Task State changes the keyboard and the API can ask for, by URL name.
+TASK_STATE_CHANGES: dict[str, Callable[[journal.Entry], journal.Entry]] = {
+    "complete": journal.complete,
+    "cancel": journal.cancel,
+    "reopen": journal.reopen,
+}
+
+
+def _change_task_state(session: Session, entry_id: int, change: str) -> journal.Entry:
+    act = TASK_STATE_CHANGES.get(change)
+    if act is None:
+        raise persistence.EntryNotFoundError(f"no Task State change {change!r}")
+    return persistence.save_entry(session, act(persistence.get_entry(session, entry_id)))
+
+
+def _edit(session: Session, entry_id: int, text: str) -> journal.Entry:
+    entry = persistence.get_entry(session, entry_id)
+    return persistence.save_entry(session, journal.edit_entry(entry, text))
+
+
+def _entry_fragment(request: Request, entry: journal.Entry) -> Response:
+    return templates.TemplateResponse(request, "_entry.html", {"entry": entry})
+
 
 def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -> FastAPI:
     settings = settings or Settings.from_env()
@@ -76,6 +104,14 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
     @app.exception_handler(journal.BlankEntryError)
     def refuse_blank_entry(request: Request, exc: journal.BlankEntryError) -> Response:
         return JSONResponse({"detail": str(exc)}, status_code=422)
+
+    @app.exception_handler(journal.TaskStateError)
+    def refuse_task_state_change(request: Request, exc: journal.TaskStateError) -> Response:
+        return JSONResponse({"detail": str(exc)}, status_code=409)
+
+    @app.exception_handler(persistence.EntryNotFoundError)
+    def entry_not_found(request: Request, exc: persistence.EntryNotFoundError) -> Response:
+        return JSONResponse({"detail": str(exc)}, status_code=404)
 
     @app.get("/", response_class=HTMLResponse)
     def todays_daily_log_page(
@@ -101,10 +137,46 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
             )
         return RedirectResponse("/", status_code=303)
 
+    @app.post("/entries/{entry_id}/{change}")
+    def change_task_state_on_page(
+        request: Request, entry_id: int, change: str, session: SessionDep
+    ) -> Response:
+        return _entry_fragment(request, _change_task_state(session, entry_id, change))
+
+    @app.post("/entries/{entry_id}")
+    def edit_entry_on_page(
+        request: Request,
+        entry_id: int,
+        text: Annotated[str, Form()],
+        session: SessionDep,
+    ) -> Response:
+        return _entry_fragment(request, _edit(session, entry_id, text))
+
+    @app.delete("/entries/{entry_id}")
+    def delete_entry_on_page(entry_id: int, session: SessionDep) -> Response:
+        persistence.delete_entry(session, entry_id)
+        # HTMX swaps the Entry's line for this empty body.
+        return Response(status_code=200)
+
     @app.post("/api/entries", status_code=201)
     def create_entry(body: NewEntryIn, session: SessionDep, today: TodayDep) -> EntryOut:
         entry = persistence.add_entry(session, journal.log_entry(body.text, on=today))
         return EntryOut.model_validate(entry, from_attributes=True)
+
+    @app.post("/api/entries/{entry_id}/{change}")
+    def change_task_state(entry_id: int, change: str, session: SessionDep) -> EntryOut:
+        entry = _change_task_state(session, entry_id, change)
+        return EntryOut.model_validate(entry, from_attributes=True)
+
+    @app.patch("/api/entries/{entry_id}")
+    def edit_entry(entry_id: int, body: EditedEntryIn, session: SessionDep) -> EntryOut:
+        entry = _edit(session, entry_id, body.text)
+        return EntryOut.model_validate(entry, from_attributes=True)
+
+    @app.delete("/api/entries/{entry_id}", status_code=204)
+    def delete_entry(entry_id: int, session: SessionDep) -> Response:
+        persistence.delete_entry(session, entry_id)
+        return Response(status_code=204)
 
     @app.get("/api/daily-logs/today")
     def todays_daily_log(session: SessionDep, today: TodayDep) -> DailyLogOut:

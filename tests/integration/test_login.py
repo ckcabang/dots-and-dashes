@@ -1,4 +1,5 @@
 import re
+import time
 from dataclasses import replace
 from datetime import UTC, datetime
 
@@ -132,6 +133,22 @@ def test_a_session_signed_by_another_secret_is_refused(settings, clock, logged_i
 
     with TestClient(create_app(other, clock=clock), cookies={"session": signed}) as client:
         assert client.get("/api/daily-logs/today").status_code == 401
+
+
+def test_a_session_survives_the_host_clock_stepping_backwards(
+    settings, clock, logged_in, monkeypatch
+):
+    # A WSL2 host's wall clock steps back by up to half a second (issue #52).
+    # Across a whole second, a cookie signed by the wall clock looks signed in
+    # the future and is refused. The session is timed by the app's clock instead.
+    host_clock = {"now": 1_800_000_000.2}
+    monkeypatch.setattr(time, "time", lambda: host_clock["now"])
+
+    with logged_in(create_app(settings, clock=clock)) as client:
+        host_clock["now"] -= 0.459
+        after_the_step = client.get("/api/daily-logs/today")
+
+    assert after_the_step.status_code == 200, after_the_step.text
 
 
 @pytest.mark.unauthorized_requests

@@ -29,4 +29,4 @@ jobs:
 
       - name: Show test stack logs
         if: failure()
-        run: COMPOSE_PROJECT_NAME=dots-and-dashes-test docker compose logs
+        run: make test-logs

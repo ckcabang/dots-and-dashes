@@ -6,7 +6,8 @@ services:
       POSTGRES_PASSWORD: dots
       POSTGRES_DB: dots_and_dashes
     ports:
-      - "${DB_PORT:-5432}:5432"
+      # Loopback only: the superuser login is in this file.
+      - "127.0.0.1:${DB_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:

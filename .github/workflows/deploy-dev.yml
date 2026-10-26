@@ -1,0 +1,35 @@
+# Keep dev on main: every merge builds an image tagged with the commit on Fly's
+# remote builder, pushes it to registry.fly.io/dots-and-dashes-dev, then
+# deploys that image to the dev app. The release command (fly.dev.toml) runs
+# the Alembic migrations first. One-time setup is scripts/provision-dev.
+name: Deploy to dev
+
+on:
+  push:
+    branches: [main]
+  # Redeploy main by hand, e.g. after changing a Fly secret.
+  workflow_dispatch:
+
+# One deploy at a time, in merge order; never cancel one mid-release.
+concurrency:
+  group: deploy-dev
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      # A deploy token scoped to dots-and-dashes-dev.
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      IMAGE: registry.fly.io/dots-and-dashes-dev:${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: superfly/flyctl-actions/setup-flyctl@1.5
+
+      - name: Build and push the image
+        run: flyctl deploy --config fly.dev.toml --remote-only --build-only --push --image-label "${{ github.sha }}"
+
+      - name: Deploy it to dev
+        run: flyctl deploy --config fly.dev.toml --image "$IMAGE"

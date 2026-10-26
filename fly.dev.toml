@@ -1,0 +1,34 @@
+# The dev app, dots-and-dashes-dev: deployed on every merge to main by
+# .github/workflows/deploy-dev.yml. One-time setup is scripts/provision-dev.
+# Secrets (DATABASE_URL, SESSION_SECRET, FLAG_MONTHLY_REVIEW) are Fly secrets.
+app = "dots-and-dashes-dev"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+# Runs in a throwaway Machine of the new image before any app Machine moves to it.
+[deploy]
+  release_command = "alembic upgrade head"
+
+[env]
+  SECURE_COOKIES = "on"
+
+# Dev stops when idle and starts on the next request.
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[http_service.checks]]
+    method = "GET"
+    path = "/login"
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "10s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

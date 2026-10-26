@@ -15,6 +15,10 @@ A personal, keyboard-first bullet journal web app: rapid logging into Daily, Mon
 - **`docs/runbooks/README.md`**: incident scenarios and their remedies. Read when an alert fires or you stage an incident with the chaos switch.
 - **`_docs/plan.md`**: the full project plan and course criteria.
 
+## Running commands
+
+Run `make check`, `make test …`, `make test-down` and `docker compose …` as standalone commands: no `cd`, no `&&`/`;` chaining, no env-var prefix, no pipes or redirects. Pass options as make variables (`make test T=tests/unit`). Only a standalone command matches the sandbox exclusions in `.claude/settings.json`, so it can reach Docker without a permission prompt.
+
 ## Agent skills
 
 - **Issue tracker**: GitHub Issues on `ckcabang/dots-and-dashes`, through the `gh` CLI. See `docs/agents/issue-tracker.md`.

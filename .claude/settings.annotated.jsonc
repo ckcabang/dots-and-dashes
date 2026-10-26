@@ -85,5 +85,18 @@
         "make test-integration",
         "make test-browser"
       ]
+    },
+    "hooks": {
+      "PreToolUse": [
+        {
+          // Refuses an excluded command above that isn't run standalone (piped, chained, redirected,
+          // env-prefixed) and `make test T=…`: those run sandboxed and fail on `open .env: permission denied`.
+          // Its two regexes copy excludedCommands, so change them together
+          "matcher": "Bash",
+          "hooks": [
+            { "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/standalone-excluded-commands.py" }
+          ]
+        }
+      ]
     }
   }

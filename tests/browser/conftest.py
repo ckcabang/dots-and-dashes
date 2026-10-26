@@ -2,6 +2,11 @@
 
 `make test` starts the test Compose stack and points BASE_URL at its app, and
 TEST_DATABASE_URL at a database on the same Postgres as the app's.
+
+Under headless Chromium here, `.click()` waits forever for the element to be
+stable, so submit and press buttons with Enter. A page from a second
+`browser.new_context()` never gets focus; a test that starts logged out uses
+`page` and `page.context.clear_cookies()` instead.
 """
 
 import os

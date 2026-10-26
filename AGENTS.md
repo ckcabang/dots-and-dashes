@@ -19,10 +19,10 @@ A personal, keyboard-first bullet journal web app: rapid logging into Daily, Mon
 
 ## Running commands
 
-Run `make check`, `make test`, `make test-integration`, `make test-browser`, `make test-logs`, `make test-down` and the `docker compose` lifecycle commands (`up`, `down`, `ps`, `logs`, `build`, `stop`, `restart`) as standalone commands: no `cd`, no `&&`/`;` chaining, no env-var prefix, no pipes or redirects. Only these exact forms match the sandbox exclusions in `.claude/settings.json`, so only they can reach Docker without a permission prompt. `make test T=…` and `docker compose exec`/`run` are not excluded: they run sandboxed, cannot reach Docker, and asking to retry them unsandboxed prompts the human. To run part of the suite, use `make test-unit` (no Docker, runs sandboxed), `make test-integration` or `make test-browser`; `make lint` and `make typecheck` also run sandboxed.
+The Docker-backed `make` targets and `docker compose` lifecycle commands reach Docker only when run bare, as listed in `.claude/settings.json`'s `sandbox.excludedCommands`; a hook refuses any other form. `docker compose exec` and `run` aren't excluded: they run sandboxed and can't reach Docker.
 
 ## Agent skills
 
-- **Issue tracker**: GitHub Issues on `ckcabang/dots-and-dashes`, through the `gh` CLI. See `docs/agents/issue-tracker.md`.
+- **Issue tracker**: GitHub Issues on `ckcabang/dots-and-dashes`, through the `gh` CLI, reading with `--json` (plain `gh issue view` fails). See `docs/agents/issue-tracker.md`.
 - **Triage labels**: the five defaults as-is (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
 - **Domain docs**: single-context, one `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.

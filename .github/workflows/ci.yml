@@ -16,7 +16,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.3.2  # publishes no floating major tag
 
       # `make setup`, plus the system libraries Chromium needs on a bare runner.
       - name: Install dependencies

@@ -83,7 +83,7 @@ class MigrationIn(BaseModel):
     The server decides the day being planned; plan overrides it.
     """
 
-    to: Literal["day", "month", "future", "date"]
+    to: journal.DestinationChoice
     on: date | None = Field(None, alias="date")
     month: str | None = Field(None, pattern=r"^\d{4}-\d{2}$")
     plan: Plan | None = None
@@ -203,11 +203,12 @@ class TriageIn(BaseModel):
     """Where to place a Capture, and its text as adjusted.
 
     to is a Daily Log ("day", with date, or else today's), the current
-    month's task list ("month"), or the Future Log ("future", with month and
-    an optional date). Without text, the Capture's own text is read.
+    month's task list ("month"), the Future Log ("future", with month and an
+    optional date), or a date ("date"), which lands on its Daily Log this
+    month or in the Future Log. Without text, the Capture's own text is read.
     """
 
-    to: Literal["day", "month", "future"]
+    to: journal.DestinationChoice
     text: str | None = None
     on: date | None = Field(None, alias="date")
     month: str | None = Field(None, pattern=r"^\d{4}-\d{2}$")
@@ -217,7 +218,7 @@ class TriageForm(BaseModel):
     """TriageIn as the Triage page sends it: the date and month as typed,
     read once the form is in, so an impossible one is refused on the page."""
 
-    to: Literal["day", "month", "future"]
+    to: journal.DestinationChoice
     text: str | None = None
     on: str | None = Field(None, alias="date")
     month: str | None = None
@@ -460,7 +461,7 @@ def _triage(
     session: Session,
     capture_id: int,
     *,
-    to: Literal["day", "month", "future"],
+    to: journal.DestinationChoice,
     on: date | None,
     month: date | None,
     text: str | None,

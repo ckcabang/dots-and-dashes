@@ -4,6 +4,8 @@ from uuid import uuid4
 
 from playwright.sync_api import Page, expect
 
+NESTED = re.compile(r"\bentry--nested\b")
+
 
 def _today(page: Page) -> date:
     return date.fromisoformat(page.locator("body").get_attribute("data-today") or "")
@@ -34,7 +36,7 @@ def test_migrating_and_scheduling_a_task_from_the_keyboard(page: Page):
     page.keyboard.press("Tab")
     # The server redraws the Daily Log, then selects the Note again; a key
     # pressed before that lands on the old list.
-    expect(entry(note)).to_have_class(re.compile(r"\bentry--nested\b"))
+    expect(entry(note)).to_have_class(NESTED)
     expect(entry(note)).to_be_focused()
     page.keyboard.press("k")
     expect(entry(task)).to_be_focused()

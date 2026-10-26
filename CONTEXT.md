@@ -84,6 +84,9 @@ Turning a Capture into an Entry, by reading its text with the Prefix rules, and 
 **Daily Migration**:
 Reviewing open Tasks from earlier days and deciding for each: complete, migrate, schedule or cancel. It is optional and can happen anytime.
 
+**Day being planned**:
+The day a Migration plans for, decided by the server in the User's timezone: from 18:00 it is the night before, planning tomorrow; otherwise today. Daily Migration lets the User plan the other day instead. A Task only moves forward, never back to an earlier day.
+
 **Monthly Review**:
 The ritual on the first of the month: dealing with last month's leftover Open Tasks and pulling this month's Future Log Entries into the new Monthly Log.
 

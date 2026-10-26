@@ -8,12 +8,14 @@
 //   x  complete      c  cancel      o  reopen
 //   e  edit (Enter saves, Escape abandons)
 //   Tab  nest a Note under the Task or Event above it    Shift+Tab  un-nest it
+//        (on a Daily Log only; elsewhere Tab moves the focus on as usual)
 //   Delete / Backspace  delete for good, after confirming
-//   m  Migrate a Task to the day being planned: today, or tomorrow (the night
-//      before) if it is already on today's Daily Log; in Daily Migration, the
-//      day the page says it plans
+//   m  Migrate a Task to the day being planned
 //   M  Migrate a Task to the planned day's month's task list
 //   s  Schedule a Task: asks for a date (YYYY-MM-DD) or a month (YYYY-MM)
+// The server decides the day being planned: tomorrow from 18:00, the night
+// before, and otherwise today. Daily Migration can plan the other day; its
+// choice is sent along.
 //   Alt+ArrowUp / Alt+ArrowDown  reorder an untimed Entry (it re-Anchors)
 // Untimed Entries can also be dragged. Timed Entries move only by changing
 // their time, so they aren't draggable and the server refuses to move them.
@@ -30,6 +32,17 @@
     else if (step < 0) quickEntry()?.focus();
   }
 
+  // Redraw the list an Entry is in from a fresh copy of the page, for a
+  // change that reaches beyond the Entry's own line.
+  async function redraw(list) {
+    const selector = `#${list.id}`;
+    await htmx.ajax("GET", location.pathname + location.search, {
+      target: selector,
+      select: selector,
+      swap: "innerHTML",
+    });
+  }
+
   // Ask the server to act on an Entry and swap in the line it sends back.
   async function act(entry, verb, path, values) {
     const id = entry.dataset.id;
@@ -40,6 +53,9 @@
     });
     byId(id)?.focus();
   }
+
+  // Notes nest only on a Daily Log.
+  const canNest = (entry) => entry.matches("#entries > .entry[data-day]");
 
   // Nesting moves Entries around, so the server redraws the whole Daily Log;
   // the same Entry is then selected again.
@@ -69,7 +85,7 @@
       entry.focus();
       return;
     }
-    const page = await fetch(location.pathname);
+    const page = await fetch(location.pathname + location.search);
     const fresh = new DOMParser().parseFromString(await page.text(), "text/html");
     for (const list of document.querySelectorAll(".entries[id]")) {
       const redrawn = fresh.getElementById(list.id);
@@ -79,35 +95,17 @@
     next?.focus();
   }
 
-  const today = () => document.body.dataset.today;
-  const dayAfter = (day) => {
-    const next = new Date(`${day}T00:00:00Z`);
-    next.setUTCDate(next.getUTCDate() + 1);
-    return next.toISOString().slice(0, 10);
+  // The day Daily Migration chose to plan, if the page is one; elsewhere the
+  // server's own choice stands.
+  const plan = () => {
+    const chosen = document.querySelector("[data-plan]")?.dataset.plan;
+    return chosen ? { plan: chosen } : {};
   };
-
-  // Daily Migration names the day it plans, decided by the server's clock.
-  const plan = () => document.querySelector("[data-planning]")?.dataset;
-
-  function migrateToPlannedDay(entry) {
-    const planned = plan();
-    if (planned) {
-      migrate(entry, { to: "day", date: planned.planning, night_before: planned.nightBefore });
-      return;
-    }
-    const day = entry.dataset.day;
-    if (day && day >= today()) {
-      migrate(entry, { to: "day", date: dayAfter(today()), night_before: "true" });
-    } else {
-      migrate(entry, { to: "day", date: today() });
-    }
-  }
 
   function schedule(entry) {
     const when = prompt("Schedule to a date (YYYY-MM-DD) or a month (YYYY-MM):")?.trim();
-    const night_before = plan()?.nightBefore || "false";
-    if (/^\d{4}-\d{2}$/.test(when)) migrate(entry, { to: "future", month: when, night_before });
-    else if (/^\d{4}-\d{2}-\d{2}$/.test(when)) migrate(entry, { to: "date", date: when, night_before });
+    if (/^\d{4}-\d{2}$/.test(when)) migrate(entry, { to: "future", month: when, ...plan() });
+    else if (/^\d{4}-\d{2}-\d{2}$/.test(when)) migrate(entry, { to: "date", date: when, ...plan() });
     else entry.focus();
   }
 
@@ -116,20 +114,15 @@
     const list = entries();
     const i = list.indexOf(entry);
     const neighbour = list[i + 1] || list[i - 1];
-    const parent = !entry.classList.contains("entry--nested");
+    const parent = hasNestedNotes(entry);
+    const container = entry.parentElement;
     await htmx.ajax("DELETE", `/entries/${entry.dataset.id}`, {
       target: entry,
       swap: "outerHTML",
     });
-    // A deleted parent's Nested Notes stand alone again (the database sets
-    // their parent to null), so redraw the Daily Log to show them un-nested.
-    if (parent && list[i + 1]?.classList.contains("entry--nested")) {
-      await htmx.ajax("GET", location.pathname, {
-        target: "#entries",
-        select: "#entries",
-        swap: "innerHTML",
-      });
-    }
+    // A deleted parent's Nested Notes stand alone again, so redraw its list
+    // to show them un-nested.
+    if (parent) await redraw(container);
     (byId(neighbour?.dataset.id) || quickEntry())?.focus();
   }
 
@@ -145,7 +138,7 @@
       event.stopPropagation();
       if (event.key === "Enter" && editor.value.trim()) {
         event.preventDefault();
-        act(entry, "POST", "", { text: editor.value });
+        save(entry, editor.value);
       } else if (event.key === "Escape") {
         event.preventDefault();
         entry.replaceChildren(...shown);
@@ -155,6 +148,21 @@
   }
 
   const isNested = (entry) => entry.classList.contains("entry--nested");
+  const hasNestedNotes = (entry) =>
+    !isNested(entry) && Boolean(entry.nextElementSibling?.classList.contains("entry--nested"));
+
+  // A parent edited into a Note lets its Nested Notes stand alone, so its
+  // list is redrawn to show them un-nested.
+  async function save(entry, text) {
+    const id = entry.dataset.id;
+    const parent = hasNestedNotes(entry);
+    const container = entry.parentElement;
+    await act(entry, "POST", "", { text });
+    if (parent) {
+      await redraw(container);
+      byId(id)?.focus();
+    }
+  }
 
   // An Entry and the Nested Notes under it, which move together.
   function block(list, entry) {
@@ -224,12 +232,8 @@
     Tab: nest,
     Delete: remove,
     Backspace: remove,
-    m: migrateToPlannedDay,
-    M: (entry) => {
-      const planned = plan();
-      const month = (planned?.planning || today()).slice(0, 7);
-      migrate(entry, { to: "month", month, night_before: planned?.nightBefore || "false" });
-    },
+    m: (entry) => migrate(entry, { to: "day", ...plan() }),
+    M: (entry) => migrate(entry, { to: "month", ...plan() }),
     s: schedule,
   };
 
@@ -256,6 +260,7 @@
     }
     const handler = onEntry[event.key];
     if (handler && target.matches(ENTRY)) {
+      if (event.key === "Tab" && !canNest(target)) return;
       event.preventDefault();
       handler(target, event);
     }

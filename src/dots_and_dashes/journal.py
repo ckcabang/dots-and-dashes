@@ -164,21 +164,7 @@ class Entry:
 
 def log_entry(text: str, *, on: date) -> NewEntry:
     """Turn text typed into a Daily Log's input box into an Entry on that day."""
-    # Only leading whitespace goes before the Prefix is read: a trailing space
-    # is what makes ". " a Prefix with no text rather than a Task called ".".
-    parsed = read_prefix(text.lstrip())
-    text = parsed.text.strip()
-    if not text:
-        raise BlankEntryError("an Entry needs some text")
-    return NewEntry(
-        type=parsed.type,
-        state=TaskState.OPEN if parsed.type is EntryType.TASK else None,
-        priority=parsed.priority,
-        inspiration=parsed.inspiration,
-        time=parsed.time,
-        text=text,
-        day=on,
-    )
+    return _new_entry(_read_entry(text), location=Location.DAY, day=on, month=None)
 
 
 class TimedEntryMoveError(ValueError):
@@ -229,6 +215,16 @@ def arrange_daily_log(entries: list[Entry]) -> list[Entry]:
     its parent goes.
     """
     return _with_nested_notes(entries, daily_log_order)
+
+
+def place_on_daily_log(entry: Entry, daily_log: list[Entry]) -> list[Entry]:
+    """Put an Entry logged or moved onto a Daily Log, given the Entries already there.
+
+    It goes to the bottom of the manual order, so an untimed Entry ends up
+    last and a Timed Entry slots in by its time. Returns the Daily Log in its
+    new order, to store as its manual order.
+    """
+    return arrange_daily_log([*daily_log, entry])
 
 
 def arrange_task_list(entries: list[Entry]) -> list[Entry]:
@@ -312,6 +308,12 @@ def change_time(entries: list[Entry], entry_id: int, *, to: time) -> list[Entry]
     others = [group for group in anchored if group is not moving]
     moved = [replace(moving[0], time=to), *moving[1:]]
     return arrange_daily_log(_in_order(top, [*others, moved]) + nested)
+
+
+def is_draggable(entry: Entry) -> bool:
+    """Whether an Entry is reordered by keyboard or drag: an untimed one on a
+    Daily Log that isn't a Nested Note. The others move with their time or parent."""
+    return entry.location is Location.DAY and entry.time is None and entry.parent_id is None
 
 
 def move_entry(entries: list[Entry], entry_id: int, *, to: int) -> list[Entry]:
@@ -418,6 +420,14 @@ def edit_entry(entry: Entry, text: str) -> Entry:
     )
 
 
+def notes_released_by_edit(edited: Entry, nested_notes: list[Entry]) -> list[Entry]:
+    """The Nested Notes an edit lets stand alone, to store: all of them if the
+    edit made their parent a Note, since Notes don't nest under Notes."""
+    if edited.type is not EntryType.NOTE:
+        return []
+    return [un_nest_note(note) for note in nested_notes]
+
+
 # A month is written as the date of its first day.
 
 
@@ -433,6 +443,11 @@ def next_month(month: date) -> date:
     return month.replace(month=month.month + 1)
 
 
+def previous_month(month: date) -> date:
+    """The month before a month, rolling January back into December."""
+    return month_of(month_of(month) - timedelta(days=1))
+
+
 def has_monthly_log(month: date, *, today: date) -> bool:
     """Only the current and past months have a Monthly Log; later ones live in the Future Log."""
     return month_of(month) <= month_of(today)
@@ -440,6 +455,8 @@ def has_monthly_log(month: date, *, today: date) -> bool:
 
 def _read_entry(text: str) -> ParsedEntry:
     """Read typed text with the Prefix rules, refusing it if no text is left."""
+    # Only leading whitespace goes before the Prefix is read: a trailing space
+    # is what makes ". " a Prefix with no text rather than a Task called ".".
     parsed = read_prefix(text.lstrip())
     text = parsed.text.strip()
     if not text:
@@ -617,34 +634,48 @@ class Migration:
     copy: NewEntry
 
 
-def day_being_planned(now: datetime, timezone: tzinfo, *, night_before: bool = False) -> date:
-    """The day a Migration plans for: today, or tomorrow when it is done the night before."""
-    planning = today(now, timezone)
-    return planning + timedelta(days=1) if night_before else planning
-
-
-# Daily Migration run from this local time until midnight is the night before,
-# planning tomorrow; from midnight until then it is the morning, planning today.
+# Migrating from this local time until midnight is the night before, planning
+# tomorrow; from midnight until then it is the morning, planning today.
 EVENING_STARTS = time(18, 0)
 
 
 def is_night_before(now: datetime, timezone: tzinfo) -> bool:
-    """Whether a Daily Migration run now is the night before: from 18:00 local time."""
+    """Whether Migrating now is the night before: from 18:00 local time."""
     return now.astimezone(timezone).time() >= EVENING_STARTS
 
 
-def daily_migration_planning(now: datetime, timezone: tzinfo) -> date:
-    """The day a Daily Migration run now plans: tomorrow in the evening, otherwise today."""
-    return day_being_planned(now, timezone, night_before=is_night_before(now, timezone))
+@dataclass(frozen=True)
+class Planning:
+    """The day being planned, and whether that makes it the night before."""
+
+    day: date
+    night_before: bool
+
+
+def daily_migration_planning(
+    now: datetime, timezone: tzinfo, *, night_before: bool | None = None
+) -> Planning:
+    """The day a Migration done now plans: tomorrow in the evening, otherwise today.
+
+    The User can choose the other day by saying whether it is the night before.
+    """
+    if night_before is None:
+        night_before = is_night_before(now, timezone)
+    planning = today(now, timezone)
+    return Planning(
+        day=planning + timedelta(days=1) if night_before else planning,
+        night_before=night_before,
+    )
 
 
 def migrate(task: Entry, *, to: Destination, planning: date) -> Migration:
     """Migrate or Schedule an Open Task to a destination.
 
     The destination decides which, given the day being planned (see
-    day_being_planned): that day or its month's task list Migrates the Task
-    (>), and a later day that month or a later month in the Future Log
-    Schedules it (<). The copy keeps the Task's text, Signifiers and time.
+    daily_migration_planning): that day or its month's task list Migrates the
+    Task (>), and a later day that month or a later month in the Future Log
+    Schedules it (<). The copy keeps the Task's text, Signifiers and time. A
+    Task only moves forward, so one on a Daily Log never moves to an earlier one.
     """
     if task.type is not EntryType.TASK:
         raise MigrationError("only Tasks are migrated or scheduled")
@@ -652,6 +683,14 @@ def migrate(task: Entry, *, to: Destination, planning: date) -> Migration:
         raise TaskStateError(f"a {task.state} Task cannot be migrated or scheduled")
     if (task.location, task.day, task.month) == (to.location, to.day, to.month):
         raise MigrationError("the Task is already there")
+    if (
+        task.location is Location.DAY
+        and to.location is Location.DAY
+        and task.day is not None
+        and to.day is not None
+        and to.day < task.day
+    ):
+        raise MigrationError("a Task cannot move back to an earlier day")
     state = _marker_for(to, planning=planning)
     copy = NewEntry(
         type=task.type,
@@ -725,6 +764,20 @@ def migration_count(entry_id: int, links: Mapping[int, int | None]) -> int:
 def relink_around(deleted: Entry, successor: Entry) -> Entry:
     """Close the gap a Deleted copy leaves: its successor now follows the copy before it."""
     return replace(successor, migrated_from_id=deleted.migrated_from_id)
+
+
+def delete_entry(
+    entry: Entry, *, successor: Entry | None, nested_notes: list[Entry]
+) -> list[Entry]:
+    """Delete an Entry: the Entries that pointed at it, changed to store first.
+
+    Its Nested Notes stand alone again, and the copy migrated or scheduled
+    from it re-links to the copy before it, closing the Migration Chain.
+    """
+    changed = [un_nest_note(note) for note in nested_notes]
+    if successor is not None:
+        changed.append(relink_around(entry, successor))
+    return changed
 
 
 def move_event(event: Entry, nested_notes: list[Entry], *, on: date) -> tuple[Entry, list[Entry]]:

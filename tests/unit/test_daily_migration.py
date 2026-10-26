@@ -26,7 +26,29 @@ def _at(local: str) -> datetime:
     ],
 )
 def test_daily_migration_in_the_evening_plans_tomorrow_and_otherwise_today(now, planning):
-    assert journal.daily_migration_planning(_at(now), LOS_ANGELES) == planning
+    assert journal.daily_migration_planning(_at(now), LOS_ANGELES).day == planning
+
+
+def test_planning_tomorrow_is_the_night_before():
+    assert journal.daily_migration_planning(_at("2026-10-25 20:00"), LOS_ANGELES) == (
+        journal.Planning(day=date(2026, 10, 26), night_before=True)
+    )
+    assert journal.daily_migration_planning(_at("2026-10-25 09:00"), LOS_ANGELES) == (
+        journal.Planning(day=date(2026, 10, 25), night_before=False)
+    )
+
+
+@pytest.mark.parametrize(
+    ("now", "night_before", "planning"),
+    [
+        pytest.param("2026-10-25 20:00", False, date(2026, 10, 25), id="today in the evening"),
+        pytest.param("2026-10-25 09:00", True, date(2026, 10, 26), id="tomorrow in the morning"),
+    ],
+)
+def test_the_user_can_choose_to_plan_the_other_day(now, night_before, planning):
+    assert journal.daily_migration_planning(
+        _at(now), LOS_ANGELES, night_before=night_before
+    ) == journal.Planning(day=planning, night_before=night_before)
 
 
 def test_whether_it_is_evening_is_read_in_the_users_timezone():
@@ -92,9 +114,9 @@ def test_daily_migration_lists_open_tasks_from_every_earlier_day_oldest_first():
 def test_daily_migration_leaves_out_what_needs_no_decision():
     entries = [
         _entry(1, "still open"),
-        _entry(2, "done", state=COMPLETED),
+        _entry(2, "sent invoice", state=COMPLETED),
         _entry(3, "moved on", state=journal.TaskState.MIGRATED),
-        _entry(4, "dropped", state=journal.TaskState.CANCELLED),
+        _entry(4, "learn banjo", state=journal.TaskState.CANCELLED),
         _entry(5, "dentist", type=EVENT, at=time(9, 0)),
         _entry(6, "felt tired", type=NOTE),
         _entry(7, "already planned", day=PLANNING),
@@ -117,7 +139,7 @@ def test_the_night_before_todays_open_tasks_are_from_an_earlier_day():
 
 
 def test_daily_migration_is_empty_when_nothing_is_left_open():
-    assert journal.daily_migration([_entry(1, "done", state=COMPLETED)], planning=PLANNING) == []
+    assert journal.daily_migration([_entry(1, "sent invoice", state=COMPLETED)], planning=PLANNING) == []
 
 
 def _grouped(review: list[journal.MigrationDay]) -> list[tuple[date, str | None, list[str]]]:

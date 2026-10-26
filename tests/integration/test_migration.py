@@ -1,26 +1,40 @@
-"""Migrating and Scheduling Tasks over HTTP. Today is 2026-10-25 (see conftest)."""
+"""Migrating and Scheduling Tasks over HTTP. Today is 2026-10-25.
+
+Most tests run at 07:00, so the day being planned is today. The shared clock
+(see conftest) reads 20:00, the night before, which plans tomorrow.
+"""
 
 from contextlib import contextmanager
+from datetime import UTC, datetime
 
 import pytest
 from fastapi.testclient import TestClient
 
 from dots_and_dashes.web import create_app
 
+# 07:00 on 2026-10-25 in Los Angeles.
+MORNING = datetime(2026, 10, 25, 14, 0, tzinfo=UTC)
+
 
 @pytest.fixture
-def client(settings, clock):
+def client(settings):
+    with TestClient(create_app(settings, clock=lambda: MORNING)) as client:
+        yield client
+
+
+@pytest.fixture
+def evening(settings, clock):
     with TestClient(create_app(settings, clock=clock)) as client:
         yield client
 
 
 @pytest.fixture
-def app_client(settings, clock):
+def app_client(settings):
     """A fresh app instance, so what it shows can only have come from Postgres."""
 
     @contextmanager
     def start():
-        with TestClient(create_app(settings, clock=clock)) as client:
+        with TestClient(create_app(settings, clock=lambda: MORNING)) as client:
             yield client
 
     return start
@@ -52,16 +66,61 @@ def test_a_task_migrated_to_today_is_copied_there_and_the_original_marked_migrat
         assert _daily_log(fresh, "2026-10-25") == [("open", "write report", 1)]
 
 
-def test_the_night_before_a_task_migrated_to_tomorrow_is_marked_migrated(client):
-    task = _log(client, day="2026-10-25")
+def test_the_night_before_a_task_migrated_to_tomorrow_is_marked_migrated(evening):
+    task = _log(evening, day="2026-10-25")
 
-    migrated = client.post(
-        f"/api/entries/{task}/migrate",
-        json={"to": "day", "date": "2026-10-26", "night_before": True},
-    )
+    migrated = evening.post(f"/api/entries/{task}/migrate", json={"to": "day"})
 
     assert migrated.json()["original"]["state"] == "migrated"
-    assert _daily_log(client, "2026-10-26") == [("open", "write report", 1)]
+    assert _daily_log(evening, "2026-10-26") == [("open", "write report", 1)]
+
+
+def test_without_a_date_a_task_migrates_to_the_day_being_planned(client):
+    task = _log(client, day="2026-10-20")
+
+    migrated = client.post(f"/api/entries/{task}/migrate", json={"to": "day"})
+
+    assert migrated.json()["original"]["state"] == "migrated"
+    assert _daily_log(client, "2026-10-25") == [("open", "write report", 1)]
+
+
+def test_in_the_morning_todays_task_is_already_on_the_day_being_planned(client):
+    task = _log(client, day="2026-10-25")
+
+    refused = client.post(f"/api/entries/{task}/migrate", json={"to": "day"})
+
+    assert refused.status_code == 422
+    assert _daily_log(client, "2026-10-25") == [("open", "write report", 0)]
+    assert _daily_log(client, "2026-10-26") == []
+
+
+def test_a_task_on_a_later_day_is_not_migrated_back_to_the_day_being_planned(client):
+    task = _log(client, day="2026-10-28")
+
+    refused = client.post(f"/api/entries/{task}/migrate", json={"to": "day"})
+
+    assert refused.status_code == 422
+    assert _daily_log(client, "2026-10-28") == [("open", "write report", 0)]
+    assert _daily_log(client, "2026-10-25") == []
+
+
+def test_the_user_can_plan_today_in_the_evening(evening):
+    task = _log(evening, day="2026-10-24")
+
+    migrated = evening.post(f"/api/entries/{task}/migrate", json={"to": "day", "plan": "today"})
+
+    assert migrated.json()["original"]["state"] == "migrated"
+    assert _daily_log(evening, "2026-10-25") == [("open", "write report", 1)]
+
+
+def test_without_a_month_a_task_migrates_to_the_planned_days_task_list(evening):
+    task = _log(evening, day="2026-10-24")
+
+    migrated = evening.post(f"/api/entries/{task}/migrate", json={"to": "month"})
+
+    assert migrated.json()["original"]["state"] == "migrated"
+    tasks = evening.get("/api/monthly-logs/2026-10").json()["tasks"]
+    assert [(t["state"], t["text"]) for t in tasks] == [("open", "write report")]
 
 
 def test_a_task_scheduled_into_the_future_log_waits_under_its_month(client):

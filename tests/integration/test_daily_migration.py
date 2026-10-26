@@ -71,11 +71,35 @@ def test_in_the_morning_daily_migration_reviews_earlier_days_and_plans_today(cli
     assert _grouped(review) == [("2026-10-24", None, ["call mum"])]
 
 
+def test_in_the_evening_the_user_can_choose_to_plan_today(client):
+    _log(client, "call mum", "2026-10-24")
+    _log(client, "write report", "2026-10-25")
+
+    review = client.get("/api/daily-migration", params={"plan": "today"}).json()
+
+    assert (review["planning"], review["night_before"]) == ("2026-10-25", False)
+    assert _grouped(review) == [("2026-10-24", None, ["call mum"])]
+
+
+def test_in_the_morning_the_user_can_choose_to_plan_tomorrow(morning):
+    review = morning.get("/api/daily-migration", params={"plan": "tomorrow"}).json()
+
+    assert (review["planning"], review["night_before"]) == ("2026-10-26", True)
+
+
+def test_the_daily_migration_page_offers_to_plan_the_other_day(client):
+    evening = client.get("/migration").text
+    chosen = client.get("/migration", params={"plan": "today"}).text
+
+    assert 'data-planning="2026-10-26"' in evening and 'href="/migration?plan=today"' in evening
+    assert 'data-planning="2026-10-25"' in chosen and 'href="/migration?plan=tomorrow"' in chosen
+
+
 def test_open_tasks_are_grouped_under_their_anchor(client):
     for text in ["water plants", "o 14:00 team offsite", "book room", "o 09:00 standup"]:
         _log(client, text, "2026-10-24")
-    done = _log(client, "send agenda", "2026-10-24")
-    client.post(f"/api/entries/{done}/complete")
+    completed = _log(client, "send agenda", "2026-10-24")
+    client.post(f"/api/entries/{completed}/complete")
 
     assert _grouped(_review(client)) == [
         ("2026-10-24", None, ["water plants"]),
@@ -89,10 +113,7 @@ def test_a_decided_task_leaves_daily_migration(client):
     _log(client, "call mum", "2026-10-24")
     planning = _review(client)["planning"]
 
-    client.post(
-        f"/api/entries/{migrated}/migrate",
-        json={"to": "day", "date": planning, "night_before": True},
-    )
+    client.post(f"/api/entries/{migrated}/migrate", json={"to": "day"})
     client.post(f"/api/entries/{completed}/complete")
 
     assert _grouped(_review(client)) == [("2026-10-24", None, ["call mum"])]

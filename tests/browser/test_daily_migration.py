@@ -14,34 +14,40 @@ def _log(page: Page, text: str) -> None:
 def test_daily_migration_decides_each_open_task_with_one_key(page: Page):
     # The stack's journal outlives test runs, so the Entries need unique text.
     run = uuid4().hex[:8]
-    done, dropped, carried, later = (
+    completed, cancelled, carried, later = (
         f"{name} {run}" for name in ["file taxes", "learn banjo", "write report", "renew passport"]
     )
     page.goto("/")
     today = date.fromisoformat(page.locator("body").get_attribute("data-today") or "")
     earlier = today - timedelta(days=3)
     page.goto(f"/days/{earlier}")
-    for task in [done, dropped, carried, later]:
+    for task in [completed, cancelled, carried, later]:
         _log(page, f". {task}")
 
     page.goto("/migration")
+    planning = page.locator("[data-planning]").get_attribute("data-planning")
+
+    # p plans the other day instead (today in the evening, tomorrow otherwise),
+    # and the keys then act for that day.
+    page.keyboard.press("p")
+    expect(page.locator("[data-planning]")).not_to_have_attribute("data-planning", planning or "")
     planning = page.locator("[data-planning]").get_attribute("data-planning")
     review = page.locator("#daily-migration")
 
     def entry(text: str):
         return review.get_by_role("listitem").filter(has_text=text)
 
-    for task in [done, dropped, carried, later]:
+    for task in [completed, cancelled, carried, later]:
         expect(entry(task)).to_have_attribute("data-state", "open")
 
     # x completes and c cancels; the decided Task stays in view, marked.
-    entry(done).focus()
+    entry(completed).focus()
     page.keyboard.press("x")
-    expect(entry(done)).to_have_attribute("data-state", "completed")
+    expect(entry(completed)).to_have_attribute("data-state", "completed")
     page.keyboard.press("j")
-    expect(entry(dropped)).to_be_focused()
+    expect(entry(cancelled)).to_be_focused()
     page.keyboard.press("c")
-    expect(entry(dropped)).to_have_attribute("data-state", "cancelled")
+    expect(entry(cancelled)).to_have_attribute("data-state", "cancelled")
 
     # m Migrates to the day being planned; the Task leaves the review and the
     # selection moves on to the next one.
@@ -63,7 +69,7 @@ def test_daily_migration_decides_each_open_task_with_one_key(page: Page):
     expect(copy.locator(".migration-count")).to_have_text(">>1")
 
     page.goto(f"/days/{earlier}")
-    for task, marker in [(done, "×"), (dropped, "•"), (carried, ">"), (later, "<")]:
+    for task, marker in [(completed, "×"), (cancelled, "•"), (carried, ">"), (later, "<")]:
         line = page.get_by_role("listitem").filter(has_text=task)
         expect(line.locator(".state-marker")).to_have_text(marker)
 

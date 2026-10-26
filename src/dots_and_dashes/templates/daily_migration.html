@@ -8,11 +8,16 @@
   <a href="/days/{{ planning.isoformat() }}">{{ planning.strftime("%A") }}'s Daily Log</a>
 </nav>
 
-<main id="daily-migration" data-planning="{{ planning.isoformat() }}" data-night-before="{{ 'true' if night_before else 'false' }}">
+{%- set plan = "tomorrow" if night_before else "today" -%}
+{%- set other = "today" if night_before else "tomorrow" -%}
+<main id="daily-migration" data-planning="{{ planning.isoformat() }}" data-plan="{{ plan }}">
   <h1>Daily Migration</h1>
   <p>
     {% if night_before %}The night before: planning tomorrow,{% else %}Planning today,{% endif %}
     <time datetime="{{ planning.isoformat() }}">{{ planning.strftime("%A, %-d %B") }}</time>.
+    <a id="plan-other-day" href="/migration?plan={{ other }}" aria-keyshortcuts="p">Plan {{ other }} instead</a> (<kbd>p</kbd>).
+  </p>
+  <p>
     <kbd>x</kbd> complete, <kbd>m</kbd> migrate, <kbd>s</kbd> schedule, <kbd>c</kbd> cancel.
   </p>
 
@@ -33,4 +38,14 @@
   <p>No Open Tasks left on earlier days.</p>
   {% endfor %}
 </main>
+
+<script>
+  // p plans the other day: tomorrow in the morning, or today the night before.
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "p" || event.ctrlKey || event.metaKey || event.altKey) return;
+    if (event.target.closest("input, textarea, select, [contenteditable]")) return;
+    event.preventDefault();
+    document.getElementById("plan-other-day").click();
+  });
+</script>
 {% endblock %}

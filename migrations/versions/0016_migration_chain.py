@@ -33,8 +33,10 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # The app before this revision has no Migrated or Scheduled Task States.
-    op.execute("UPDATE entries SET state = 'completed' WHERE state IN ('migrated', 'scheduled')")
-    op.drop_index(op.f('ix_entries_migrated_from_id'), table_name='entries')
-    op.drop_constraint('entries_migrated_from_id_fkey', 'entries', type_='foreignkey')
-    op.drop_column('entries', 'migrated_from_id')
+    # Mapping Migrated and Scheduled Tasks to some older Task State would lose
+    # the Migration Chain and rewrite the journal's history, so don't.
+    raise NotImplementedError(
+        "0016_migration_chain is irreversible: Migrated and Scheduled Tasks and their "
+        "Migration Chains have no earlier form. Roll back by deploying the previous "
+        "image against this schema instead of downgrading it."
+    )

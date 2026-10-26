@@ -381,6 +381,18 @@ def test_in_december_january_is_the_first_month_of_the_future_log():
     assert journal.next_month(date(2026, 12, 1)) == date(2027, 1, 1)
 
 
+@pytest.mark.parametrize(
+    ("month", "previous"),
+    [
+        (date(2026, 10, 1), date(2026, 9, 1)),
+        (date(2026, 3, 1), date(2026, 2, 1)),
+        (date(2027, 1, 1), date(2026, 12, 1)),
+    ],
+)
+def test_the_month_before_a_month_rolls_january_back_into_december(month, previous):
+    assert journal.previous_month(month) == previous
+
+
 def test_text_logged_on_a_monthly_log_goes_on_that_months_task_list():
     entry = journal.log_month_entry(
         "*. renew passport", month=date(2026, 10, 1), today=date(2026, 10, 25)
@@ -707,6 +719,53 @@ def test_a_timed_entry_cannot_be_dragged():
         journal.move_entry(daily_log, _by_text(daily_log, "lunch").id, to=0)
 
 
+def test_only_an_untimed_entry_on_a_daily_log_that_is_not_a_nested_note_is_draggable():
+    untimed = _stored(1, "buy milk", None)
+
+    assert journal.is_draggable(untimed)
+    assert not journal.is_draggable(_stored(2, "standup", time(9, 30)))
+    assert not journal.is_draggable(replace(untimed, parent_id=3))
+    assert not journal.is_draggable(
+        replace(untimed, location=journal.Location.MONTH, day=None, month=date(2026, 10, 1))
+    )
+
+
+def test_an_untimed_entry_added_to_a_daily_log_goes_to_the_bottom():
+    *daily_log, added = _day(
+        ("buy milk", None),
+        ("standup", time(9, 30)),
+        ("lunch", time(12, 0)),
+        ("book a table", None),
+        ("call back", None),
+    )
+
+    assert _texts(journal.place_on_daily_log(added, daily_log)) == [
+        "buy milk",
+        "standup",
+        "lunch",
+        "book a table",
+        "call back",
+    ]
+
+
+def test_a_timed_entry_added_to_a_daily_log_slots_in_by_its_time():
+    *daily_log, added = _day(
+        ("buy milk", None),
+        ("standup", time(9, 30)),
+        ("prep notes", None),
+        ("lunch", time(12, 0)),
+        ("dentist", time(10, 0)),
+    )
+
+    assert _texts(journal.place_on_daily_log(added, daily_log)) == [
+        "buy milk",
+        "standup",
+        "prep notes",
+        "dentist",
+        "lunch",
+    ]
+
+
 def _logged(
     id: int,
     type: journal.EntryType,
@@ -864,6 +923,45 @@ def test_editing_a_nested_note_into_a_task_un_nests_it():
     edited = journal.edit_entry(note, ". bring card")
 
     assert (edited.type, edited.parent_id) == (TASK, None)
+
+
+def test_a_parent_edited_into_a_note_lets_its_nested_notes_stand_alone():
+    # Notes don't nest under Notes, and nesting is one level deep.
+    task = _logged(1, TASK, "dentist")
+    notes = [_logged(2, NOTE, "bring card", parent_id=1), _logged(3, NOTE, "9am", parent_id=1)]
+
+    edited = journal.edit_entry(task, "- dentist was fine")
+
+    assert [note.parent_id for note in journal.notes_released_by_edit(edited, notes)] == [
+        None,
+        None,
+    ]
+
+
+@pytest.mark.parametrize("text", [". dentist at 3", "o dentist"])
+def test_a_parent_still_a_task_or_event_after_an_edit_keeps_its_nested_notes(text):
+    task = _logged(1, TASK, "dentist")
+    notes = [_logged(2, NOTE, "bring card", parent_id=1)]
+
+    assert journal.notes_released_by_edit(journal.edit_entry(task, text), notes) == []
+
+
+def test_deleting_a_parent_lets_its_nested_notes_stand_alone():
+    task = _logged(1, TASK, "dentist")
+    note = _logged(2, NOTE, "bring card", parent_id=1)
+
+    assert journal.delete_entry(task, successor=None, nested_notes=[note]) == [
+        replace(note, parent_id=None)
+    ]
+
+
+def test_deleting_a_copy_mid_chain_re_links_its_successor_to_the_copy_before_it():
+    middle = replace(_logged(2, TASK, "write report"), migrated_from_id=1)
+    successor = replace(_logged(3, TASK, "write report"), migrated_from_id=2)
+
+    assert journal.delete_entry(middle, successor=successor, nested_notes=[]) == [
+        replace(successor, migrated_from_id=1)
+    ]
 
 
 def test_a_daily_log_entry_is_on_its_days_daily_log():

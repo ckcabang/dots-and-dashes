@@ -25,7 +25,7 @@ Exactly three, each testing behaviour through a public interface:
 ## Where it runs
 
 - **Local**: `docker compose up` (app + Postgres).
-- **Hosting**: Fly.io, two apps, `dots-and-dashes-dev` and `dots-and-dashes` (prod), each with its own self-run Postgres Machine (ADR-0003). Alembic migrations run as the release command.
-- **CI/CD**: GitHub Actions. CI runs `make check` on every PR. A merge to `main` deploys to dev (`deploy-dev.yml`, `fly.dev.toml`; set up with `scripts/provision-dev`); prod deploys and rollbacks are a manual `workflow_dispatch` with an image tag.
+- **Hosting**: Fly.io, two apps, `dots-and-dashes-dev` and `dots-and-dashes` (prod), each with its own self-run Postgres Machine (ADR-0003). Alembic migrations run as the release command, `dots-and-dashes migrate`.
+- **CI/CD**: GitHub Actions. CI runs `make check` on every PR. A merge to `main` deploys to dev (`deploy-dev.yml`, `fly.dev.toml`; set up with `scripts/provision-dev`); prod deploys and rollbacks are a manual `workflow_dispatch` with an image tag (`deploy-prod.yml`, `fly.prod.toml`; set up with `scripts/provision-prod`; `docs/runbooks/deploy.md`). Both run `dots-and-dashes migrate` as the release command.
 - **Telemetry**: OpenTelemetry to Grafana Cloud. Traces, metrics and logs share a trace ID. Entry and Capture text never enters a signal: record type, length and IDs instead.
 - **Canary**: a Canary User exercises the key journey (log an Entry on today's Daily Log) every minute, so the save failure and save latency alerts have traffic to fire on.

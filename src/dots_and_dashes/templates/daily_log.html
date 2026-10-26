@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1><time datetime="{{ day.isoformat() }}">{{ day.strftime("%A, %-d %B %Y") }}</time></h1>
+
+<form method="post" action="/entries"
+      hx-post="/entries" hx-target="#entries" hx-swap="beforeend"
+      hx-on::after-request="if (event.detail.successful) this.reset()">
+  <input name="text" aria-label="New entry" autocomplete="off" autofocus required pattern=".*\S.*">
+</form>
+
+<ul id="entries" class="entries">
+  {% for entry in entries %}{% include "_entry.html" %}{% endfor %}
+</ul>
+{% endblock %}

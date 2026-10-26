@@ -1,13 +1,18 @@
 # Gate every pull request on `make check`: mypy, then the unit, integration
 # and browser suites against the test Compose stack (Postgres + app container).
+# It also runs on main, because a pull request can only restore caches saved
+# by itself or by main.
 name: CI
 
 on:
   pull_request:
+  push:
+    branches: [main]
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # A cancelled run on main saves no cache.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   check:

@@ -8,6 +8,7 @@
 //   x  complete      c  cancel      o  reopen
 //   e  edit (Enter saves, Escape abandons)
 //   Tab  nest a Note under the Task or Event above it    Shift+Tab  un-nest it
+//        (on a Daily Log only; elsewhere Tab moves the focus on as usual)
 //   Delete / Backspace  delete for good, after confirming
 //   m  Migrate a Task to the day being planned
 //   M  Migrate a Task to the planned day's month's task list
@@ -31,6 +32,17 @@
     else if (step < 0) quickEntry()?.focus();
   }
 
+  // Redraw the list an Entry is in from a fresh copy of the page, for a
+  // change that reaches beyond the Entry's own line.
+  async function redraw(list) {
+    const selector = `#${list.id}`;
+    await htmx.ajax("GET", location.pathname + location.search, {
+      target: selector,
+      select: selector,
+      swap: "innerHTML",
+    });
+  }
+
   // Ask the server to act on an Entry and swap in the line it sends back.
   async function act(entry, verb, path, values) {
     const id = entry.dataset.id;
@@ -41,6 +53,9 @@
     });
     byId(id)?.focus();
   }
+
+  // Notes nest only on a Daily Log.
+  const canNest = (entry) => entry.matches("#entries > .entry[data-day]");
 
   // Nesting moves Entries around, so the server redraws the whole Daily Log;
   // the same Entry is then selected again.
@@ -99,20 +114,15 @@
     const list = entries();
     const i = list.indexOf(entry);
     const neighbour = list[i + 1] || list[i - 1];
-    const parent = !entry.classList.contains("entry--nested");
+    const parent = hasNestedNotes(entry);
+    const container = entry.parentElement;
     await htmx.ajax("DELETE", `/entries/${entry.dataset.id}`, {
       target: entry,
       swap: "outerHTML",
     });
-    // A deleted parent's Nested Notes stand alone again (the database sets
-    // their parent to null), so redraw the Daily Log to show them un-nested.
-    if (parent && list[i + 1]?.classList.contains("entry--nested")) {
-      await htmx.ajax("GET", location.pathname, {
-        target: "#entries",
-        select: "#entries",
-        swap: "innerHTML",
-      });
-    }
+    // A deleted parent's Nested Notes stand alone again, so redraw its list
+    // to show them un-nested.
+    if (parent) await redraw(container);
     (byId(neighbour?.dataset.id) || quickEntry())?.focus();
   }
 
@@ -128,7 +138,7 @@
       event.stopPropagation();
       if (event.key === "Enter" && editor.value.trim()) {
         event.preventDefault();
-        act(entry, "POST", "", { text: editor.value });
+        save(entry, editor.value);
       } else if (event.key === "Escape") {
         event.preventDefault();
         entry.replaceChildren(...shown);
@@ -138,6 +148,21 @@
   }
 
   const isNested = (entry) => entry.classList.contains("entry--nested");
+  const hasNestedNotes = (entry) =>
+    !isNested(entry) && Boolean(entry.nextElementSibling?.classList.contains("entry--nested"));
+
+  // A parent edited into a Note lets its Nested Notes stand alone, so its
+  // list is redrawn to show them un-nested.
+  async function save(entry, text) {
+    const id = entry.dataset.id;
+    const parent = hasNestedNotes(entry);
+    const container = entry.parentElement;
+    await act(entry, "POST", "", { text });
+    if (parent) {
+      await redraw(container);
+      byId(id)?.focus();
+    }
+  }
 
   // An Entry and the Nested Notes under it, which move together.
   function block(list, entry) {
@@ -235,6 +260,7 @@
     }
     const handler = onEntry[event.key];
     if (handler && target.matches(ENTRY)) {
+      if (event.key === "Tab" && !canNest(target)) return;
       event.preventDefault();
       handler(target, event);
     }

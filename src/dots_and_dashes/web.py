@@ -173,9 +173,35 @@ class NewCaptureIn(BaseModel):
     text: str
 
 
+class SuggestionOut(BaseModel):
+    """What Triage suggests a Capture becomes, and that written as typed, to adjust."""
+
+    type: journal.EntryType
+    priority: bool
+    inspiration: bool
+    time: time | None
+    text: str
+    typed: str
+
+
 class CaptureOut(BaseModel):
     id: int
     text: str
+    suggestion: SuggestionOut
+
+
+class TriageIn(BaseModel):
+    """Where to place a Capture, and its text as adjusted.
+
+    to is a Daily Log ("day", with date, or else today's), the current
+    month's task list ("month"), or the Future Log ("future", with month and
+    an optional date). Without text, the Capture's own text is read.
+    """
+
+    to: Literal["day", "month", "future"]
+    text: str | None = None
+    on: date | None = Field(None, alias="date")
+    month: str | None = Field(None, pattern=r"^\d{4}-\d{2}$")
 
 
 class InboxOut(BaseModel):
@@ -200,7 +226,19 @@ def _out(entry: journal.Entry) -> EntryOut:
 
 
 def _capture_out(capture: journal.Capture) -> CaptureOut:
-    return CaptureOut(id=capture.id, text=capture.text)
+    suggestion = journal.triage_suggestion(capture)
+    return CaptureOut(
+        id=capture.id,
+        text=capture.text,
+        suggestion=SuggestionOut(
+            type=suggestion.type,
+            priority=suggestion.priority,
+            inspiration=suggestion.inspiration,
+            time=suggestion.time,
+            text=suggestion.text,
+            typed=journal.as_typed(suggestion),
+        ),
+    )
 
 
 # A login lasts 30 days, on desktop and phone alike. The session lives only in
@@ -390,6 +428,26 @@ def _delete(session: Session, entry_id: int) -> None:
     ):
         persistence.save_entry(session, changed)
     persistence.delete_entry(session, entry_id)
+
+
+def _triage_destination(body: TriageIn, today: date) -> journal.Destination:
+    match body.to:
+        case "day":
+            return journal.Destination.daily_log(body.on or today)
+        case "month":
+            return journal.Destination.monthly_log(today)
+        case "future" if body.month:
+            return journal.Destination.future_log(_parse_month(body.month), on=body.on)
+    raise HTTPException(422, "the Future Log needs a month")
+
+
+def _triage(session: Session, capture_id: int, body: TriageIn, today: date) -> journal.Entry:
+    """Turn a Capture into an Entry where it was placed, taking it out of the Inbox."""
+    capture = persistence.get_capture(session, capture_id)
+    to = _triage_destination(body, today)
+    entry = _add(session, journal.triage(capture, text=body.text, to=to, today=today))
+    persistence.delete_capture(session, capture_id)
+    return entry
 
 
 def _entry_fragment(request: Request, entry: journal.Entry) -> Response:
@@ -897,6 +955,17 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
     @app.post("/api/captures", status_code=201)
     def create_capture(body: NewCaptureIn, session: SessionDep) -> CaptureOut:
         return _capture_out(persistence.add_capture(session, journal.capture(body.text)))
+
+    @app.post("/api/captures/{capture_id}/triage", status_code=201)
+    def triage_capture(
+        capture_id: int, body: TriageIn, session: SessionDep, today: TodayDep
+    ) -> EntryOut:
+        return _out(_triage(session, capture_id, body, today))
+
+    @app.delete("/api/captures/{capture_id}", status_code=204)
+    def delete_capture(capture_id: int, session: SessionDep) -> Response:
+        persistence.delete_capture(session, capture_id)
+        return Response(status_code=204)
 
     @app.get("/api/inbox")
     def inbox(session: SessionDep) -> InboxOut:

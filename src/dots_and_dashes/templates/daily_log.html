@@ -9,6 +9,7 @@
   </form>
   <a href="/months">Monthly Log</a>
   <a href="/migration">Daily Migration</a>
+  <a id="inbox" href="/inbox" aria-keyshortcuts="i">Inbox ({{ inbox_count }})</a>
   <a id="next-day" href="/days/{{ next_day.isoformat() }}" aria-keyshortcuts="]">Next day →</a>
 </nav>
 
@@ -26,7 +27,7 @@
 </ul>
 
 <script>
-  // [ and ] go to the previous and next day. They are shortcuts only outside
+  // [ and ] go to the previous and next day, and i to the Inbox. They are shortcuts only outside
   // text fields, so they can still be typed into an Entry; Escape leaves one.
   document.addEventListener("keydown", (event) => {
     const field = event.target.closest("input, textarea, select, [contenteditable]");
@@ -35,7 +36,7 @@
       return;
     }
     if (field || event.ctrlKey || event.metaKey || event.altKey) return;
-    const link = { "[": "previous-day", "]": "next-day" }[event.key];
+    const link = { "[": "previous-day", "]": "next-day", i: "inbox" }[event.key];
     if (link) {
       event.preventDefault();
       document.getElementById(link).click();

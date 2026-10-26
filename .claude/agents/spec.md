@@ -1,6 +1,7 @@
 ---
 name: spec
 description: Grills an idea into a spec issue, then splits the spec into tickets with acceptance criteria labelled `ready-for-agent`. Use when there is a new feature idea or a spec to break down.
+model: opus
 ---
 
 You are the Spec agent. You turn ideas into work the Builder can pick up without asking questions. The handoffs around you are in `docs/process/agent-team.md`.

@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# Merge a branch into the current branch in a worktree whose .claude/ files the
+# sandbox masks (mounts over them read-only), which makes a plain `git merge`
+# fail with "would be overwritten" when the other side changed .claude/.
+#
+# Usage: scripts/sync-worktree <branch> [message]
+#
+# When the branch changed nothing under .claude/, this is a plain merge.
+# Otherwise it builds the merge commit without writing the masked files, then
+# hides them from `git status` with skip-worktree. A conflict stops it either
+# way: the plain merge leaves the usual conflict markers to resolve; the other
+# path changes nothing and lists the conflicting files, to merge by hand.
+set -euo pipefail
+
+branch=${1:?usage: scripts/sync-worktree <branch> [message]}
+message=${2:-"Merge branch '$branch' into $(git branch --show-current)"}
+
+if git diff --quiet HEAD..."$branch" -- .claude; then
+    exec git merge --no-ff --no-edit -m "$message" "$branch"
+fi
+
+if ! tree=$(git merge-tree --write-tree --name-only HEAD "$branch"); then
+    echo "sync-worktree: merging $branch conflicts; resolve it by hand:" >&2
+    printf '%s\n' "$tree" | tail -n +2 >&2
+    exit 1
+fi
+
+before=$(git rev-parse HEAD)
+commit=$(git commit-tree "$tree" -p HEAD -p "$branch" -m "$message")
+git reset -q --mixed "$commit"
+
+# Bring the working tree up to the merge, outside the masked .claude/ files.
+git diff --name-only --diff-filter=d "$before" "$commit" -- . ':!.claude' \
+    | xargs -r git checkout "$commit" --
+git diff --name-only --diff-filter=D "$before" "$commit" -- . ':!.claude' \
+    | xargs -r rm -f --
+
+# The masked files can't take the new contents, so tell git not to look at them.
+git ls-files -z .claude | xargs -0 -r git update-index --skip-worktree
+
+git diff --quiet "$commit" -- . ':!.claude' || {
+    echo "sync-worktree: the working tree doesn't match $commit outside .claude/" >&2
+    exit 1
+}
+echo "Merged $branch as $(git rev-parse --short HEAD); .claude/ files are skip-worktree here."

@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+
+{% block title %}Future Log · Dots & Dashes{% endblock %}
+
+{% block content %}
+<nav class="day-nav" aria-label="Logs">
+  <a href="/months/{{ today.strftime('%Y-%m') }}">← Monthly Log</a>
+</nav>
+
+<h1>Future Log</h1>
+
+<form method="post" action="/future/entries">
+  <input name="text" aria-label="New entry" autocomplete="off" autofocus required pattern=".*\S.*">
+  <input type="month" name="month" aria-label="Month" min="{{ first_month.strftime('%Y-%m') }}" value="{{ first_month.strftime('%Y-%m') }}" required>
+  <input type="date" name="date" aria-label="Date (optional)" min="{{ first_month.isoformat() }}">
+  <button>Add</button>
+</form>
+
+{% for bucket in future_log %}
+<section aria-labelledby="month-{{ bucket.month.strftime('%Y-%m') }}">
+  <h2 id="month-{{ bucket.month.strftime('%Y-%m') }}"><time datetime="{{ bucket.month.strftime('%Y-%m') }}">{{ bucket.month.strftime("%B %Y") }}</time></h2>
+  <ul id="entries-{{ bucket.month.strftime('%Y-%m') }}" class="entries">
+    {% for entry in bucket.entries %}{% include "_entry.html" %}{% endfor %}
+  </ul>
+</section>
+{% endfor %}
+{% endblock %}

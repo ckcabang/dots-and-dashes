@@ -5,6 +5,7 @@ They run against a real Postgres named by TEST_DATABASE_URL, which
 missing and rebuilt with Alembic once per run.
 """
 
+import logging
 import os
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -18,10 +19,41 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, make_url, text
 
-from dots_and_dashes import cli
+from dots_and_dashes import cli, telemetry
 from dots_and_dashes.settings import Settings
 
 TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL", "")
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    config.addinivalue_line(
+        "markers", "failed_requests: the test expects the app to fail a request with a 500"
+    )
+
+
+class _FailedRequests(logging.Handler):
+    def __init__(self) -> None:
+        super().__init__()
+        self.lines: list[str] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.lines.append(record.getMessage())
+
+
+@pytest.fixture(autouse=True)
+def no_failed_requests(request: pytest.FixtureRequest):
+    """Fail a test during which the app answered an unhandled error with a 500.
+
+    The app answers it itself, so the server never logs its traceback; a test
+    whose setup calls don't check their status would otherwise pass on one.
+    """
+    failed = _FailedRequests()
+    logger = logging.getLogger(telemetry.__name__)
+    logger.addHandler(failed)
+    yield
+    logger.removeHandler(failed)
+    if failed.lines and not request.node.get_closest_marker("failed_requests"):
+        pytest.fail("The app failed a request:\n" + "\n".join(failed.lines))
 
 # 03:00 UTC on 26 Oct is still 25 Oct in the User's Los Angeles, so tests
 # that see 2026-10-25 as "today" prove the User's timezone is applied.
@@ -79,6 +111,12 @@ def settings(database_url: str) -> Settings:
 
 PASSWORD = "correct horse battery staple"
 EMAIL = "me@example.com"
+
+
+@pytest.fixture
+def password() -> str:
+    """Every User's password, for logging in without the `logged_in` fixture."""
+    return PASSWORD
 
 
 @pytest.fixture

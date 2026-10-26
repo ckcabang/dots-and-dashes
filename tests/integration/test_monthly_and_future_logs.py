@@ -173,7 +173,8 @@ def test_editing_a_future_log_entry_into_an_event_keeps_its_month_and_date(clien
 
     assert edited.status_code == 200
     assert (edited.json()["type"], edited.json()["state"]) == ("event", None)
-    march = next(m for m in client.get("/api/future-log").json()["months"] if m["month"] == "2027-03")
+    months = client.get("/api/future-log").json()["months"]
+    march = next(m for m in months if m["month"] == "2027-03")
     [stored] = march["entries"]
     assert (stored["location"], stored["month"], stored["day"]) == (
         "future",

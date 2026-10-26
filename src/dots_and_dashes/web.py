@@ -6,7 +6,8 @@ from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from typing import Annotated, Literal
 
-from fastapi import Depends, FastAPI, Form, HTTPException, Path as PathParam, Query, Request
+from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request
+from fastapi import Path as PathParam
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates

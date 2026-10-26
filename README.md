@@ -17,8 +17,10 @@ Requires [uv](https://docs.astral.sh/uv/) and Docker.
 ```sh
 make setup      # install Python 3.12 dependencies and Playwright's Chromium
 make test       # unit, integration and browser tests (T=path for some only)
+make test-unit  # one suite: also test-integration, test-browser
+make lint       # ruff, and a single Alembic head
 make typecheck  # mypy
-make check      # typecheck, then test
+make check      # lint, typecheck, then test
 ```
 
 CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs `make check` on every pull request.

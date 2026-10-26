@@ -902,6 +902,45 @@ def test_editing_a_nested_note_into_a_task_un_nests_it():
     assert (edited.type, edited.parent_id) == (TASK, None)
 
 
+def test_a_parent_edited_into_a_note_lets_its_nested_notes_stand_alone():
+    # Notes don't nest under Notes, and nesting is one level deep.
+    task = _logged(1, TASK, "dentist")
+    notes = [_logged(2, NOTE, "bring card", parent_id=1), _logged(3, NOTE, "9am", parent_id=1)]
+
+    edited = journal.edit_entry(task, "- dentist was fine")
+
+    assert [note.parent_id for note in journal.notes_released_by_edit(edited, notes)] == [
+        None,
+        None,
+    ]
+
+
+@pytest.mark.parametrize("text", [". dentist at 3", "o dentist"])
+def test_a_parent_still_a_task_or_event_after_an_edit_keeps_its_nested_notes(text):
+    task = _logged(1, TASK, "dentist")
+    notes = [_logged(2, NOTE, "bring card", parent_id=1)]
+
+    assert journal.notes_released_by_edit(journal.edit_entry(task, text), notes) == []
+
+
+def test_deleting_a_parent_lets_its_nested_notes_stand_alone():
+    task = _logged(1, TASK, "dentist")
+    note = _logged(2, NOTE, "bring card", parent_id=1)
+
+    assert journal.delete_entry(task, successor=None, nested_notes=[note]) == [
+        replace(note, parent_id=None)
+    ]
+
+
+def test_deleting_a_copy_mid_chain_re_links_its_successor_to_the_copy_before_it():
+    middle = replace(_logged(2, TASK, "write report"), migrated_from_id=1)
+    successor = replace(_logged(3, TASK, "write report"), migrated_from_id=2)
+
+    assert journal.delete_entry(middle, successor=successor, nested_notes=[]) == [
+        replace(successor, migrated_from_id=1)
+    ]
+
+
 def test_a_daily_log_entry_is_on_its_days_daily_log():
     entry = _on_day(1, "- idea", day=date(2026, 10, 25))
 

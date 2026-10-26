@@ -428,6 +428,14 @@ def edit_entry(entry: Entry, text: str) -> Entry:
     )
 
 
+def notes_released_by_edit(edited: Entry, nested_notes: list[Entry]) -> list[Entry]:
+    """The Nested Notes an edit lets stand alone, to store: all of them if the
+    edit made their parent a Note, since Notes don't nest under Notes."""
+    if edited.type is not EntryType.NOTE:
+        return []
+    return [un_nest_note(note) for note in nested_notes]
+
+
 # A month is written as the date of its first day.
 
 
@@ -757,6 +765,20 @@ def migration_count(entry_id: int, links: Mapping[int, int | None]) -> int:
 def relink_around(deleted: Entry, successor: Entry) -> Entry:
     """Close the gap a Deleted copy leaves: its successor now follows the copy before it."""
     return replace(successor, migrated_from_id=deleted.migrated_from_id)
+
+
+def delete_entry(
+    entry: Entry, *, successor: Entry | None, nested_notes: list[Entry]
+) -> list[Entry]:
+    """Delete an Entry: the Entries that pointed at it, changed to store first.
+
+    Its Nested Notes stand alone again, and the copy migrated or scheduled
+    from it re-links to the copy before it, closing the Migration Chain.
+    """
+    changed = [un_nest_note(note) for note in nested_notes]
+    if successor is not None:
+        changed.append(relink_around(entry, successor))
+    return changed
 
 
 def move_event(event: Entry, nested_notes: list[Entry], *, on: date) -> tuple[Entry, list[Entry]]:

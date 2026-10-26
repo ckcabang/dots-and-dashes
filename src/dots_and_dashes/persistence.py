@@ -48,7 +48,8 @@ class EntryRow(Base):
     # Manual position within its Daily Log, as the Journal module ordered it.
     # Monthly Log and Future Log Entries have one too, but nothing orders by it.
     position: Mapped[int] = mapped_column(Integer)
-    # A Nested Note's parent Task or Event.
+    # A Nested Note's parent Task or Event. The Journal un-nests a deleted
+    # parent's Notes; SET NULL is only a safety net.
     parent_id: Mapped[int | None] = mapped_column(
         ForeignKey("entries.id", ondelete="SET NULL")
     )

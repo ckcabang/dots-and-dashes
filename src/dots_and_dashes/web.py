@@ -209,8 +209,11 @@ def _change_task_state(session: Session, entry_id: int, change: str) -> journal.
 
 
 def _edit(session: Session, entry_id: int, text: str) -> journal.Entry:
-    entry = persistence.get_entry(session, entry_id)
-    return persistence.save_entry(session, journal.edit_entry(entry, text))
+    edited = journal.edit_entry(persistence.get_entry(session, entry_id), text)
+    nested_notes = persistence.nested_notes(session, entry_id)
+    for note in journal.notes_released_by_edit(edited, nested_notes):
+        persistence.save_entry(session, note)
+    return persistence.save_entry(session, edited)
 
 
 def _destination(body: MigrationIn, planning: date) -> journal.Destination:
@@ -268,11 +271,13 @@ def _move_event(session: Session, entry_id: int, on: date) -> journal.Entry:
 
 
 def _delete(session: Session, entry_id: int) -> None:
-    """Delete an Entry, re-linking its Migration Chain around it."""
-    entry = persistence.get_entry(session, entry_id)
-    successor = persistence.successor(session, entry_id)
-    if successor is not None:
-        persistence.save_entry(session, journal.relink_around(entry, successor))
+    """Delete an Entry, storing first what the Journal changes to stop pointing at it."""
+    for changed in journal.delete_entry(
+        persistence.get_entry(session, entry_id),
+        successor=persistence.successor(session, entry_id),
+        nested_notes=persistence.nested_notes(session, entry_id),
+    ):
+        persistence.save_entry(session, changed)
     persistence.delete_entry(session, entry_id)
 
 

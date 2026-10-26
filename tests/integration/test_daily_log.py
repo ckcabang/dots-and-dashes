@@ -287,6 +287,28 @@ def test_a_nested_note_can_be_un_nested(app_client):
         assert _layout(client) == [("dentist", None), ("bring card", None)]
 
 
+def test_a_parent_edited_into_a_note_lets_its_nested_notes_stand_alone(app_client):
+    with app_client() as client:
+        dentist, card = _log(client, ". dentist", "- bring card")
+        client.post(f"/api/entries/{card}/nest")
+        edited = client.patch(f"/api/entries/{dentist}", json={"text": "- dentist was fine"})
+
+    assert edited.status_code == 200
+
+    with app_client() as client:
+        assert _layout(client) == [("dentist was fine", None), ("bring card", None)]
+
+
+def test_a_deleted_parents_nested_notes_stand_alone(app_client):
+    with app_client() as client:
+        dentist, card = _log(client, ". dentist", "- bring card")
+        client.post(f"/api/entries/{card}/nest")
+        client.delete(f"/api/entries/{dentist}")
+
+    with app_client() as client:
+        assert _layout(client) == [("bring card", None)]
+
+
 def test_a_note_cannot_nest_under_a_note_and_a_task_cannot_nest(app_client):
     with app_client() as client:
         _, card, cab = _log(client, "- the cafe opens at 7", "- and closes at 3", ". book a cab")

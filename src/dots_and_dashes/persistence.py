@@ -7,6 +7,7 @@ from sqlalchemy import (
     Boolean,
     Date,
     DateTime,
+    ForeignKey,
     Identity,
     String,
     Text,
@@ -40,6 +41,10 @@ class EntryRow(Base):
     location: Mapped[str] = mapped_column(String(16), server_default="day")
     # The month, as its first day, for the Monthly Log and Future Log.
     month: Mapped[date | None] = mapped_column(Date, index=True)
+    # A Nested Note's parent Task or Event.
+    parent_id: Mapped[int | None] = mapped_column(
+        ForeignKey("entries.id", ondelete="SET NULL")
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -56,6 +61,7 @@ class EntryRow(Base):
             day=self.day,
             location=journal.Location(self.location),
             month=self.month,
+            parent_id=self.parent_id,
         )
 
 
@@ -82,7 +88,7 @@ def entries_on(session: Session, day: date) -> list[journal.Entry]:
         .where(EntryRow.location == journal.Location.DAY, EntryRow.day == day)
         .order_by(EntryRow.id)
     )
-    return journal.daily_log_order([row.to_entry() for row in rows])
+    return journal.arrange_daily_log([row.to_entry() for row in rows])
 
 
 def monthly_log(
@@ -119,3 +125,16 @@ def future_log(session: Session, today: date) -> list[journal.FutureMonth]:
         .order_by(EntryRow.id)
     )
     return journal.future_log([row.to_entry() for row in rows], today=today)
+
+
+def get_entry(session: Session, entry_id: int) -> journal.Entry | None:
+    row = session.get(EntryRow, entry_id)
+    return row.to_entry() if row else None
+
+
+def set_parent(session: Session, entry: journal.Entry) -> journal.Entry:
+    """Store whether an Entry is a Nested Note, and under which parent."""
+    row = session.get_one(EntryRow, entry.id)
+    row.parent_id = entry.parent_id
+    session.flush()
+    return row.to_entry()

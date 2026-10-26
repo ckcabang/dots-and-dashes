@@ -43,6 +43,7 @@ class EntryOut(BaseModel):
     day: date | None
     location: journal.Location
     month: date | None
+    parent_id: int | None
 
 
 class DailyLogOut(BaseModel):
@@ -111,6 +112,24 @@ TodayDep = Annotated[date, Depends(_today)]
 MonthDep = Annotated[date, Depends(_month_param)]
 
 
+def _nest(session: Session, entry_id: int) -> journal.Entry:
+    entry = _existing_entry(session, entry_id)
+    daily_log = persistence.entries_on(session, journal.daily_log_day(entry))
+    return persistence.set_parent(session, journal.nest_note(entry, daily_log))
+
+
+def _un_nest(session: Session, entry_id: int) -> journal.Entry:
+    entry = _existing_entry(session, entry_id)
+    return persistence.set_parent(session, journal.un_nest_note(entry))
+
+
+def _existing_entry(session: Session, entry_id: int) -> journal.Entry:
+    entry = persistence.get_entry(session, entry_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="no such Entry")
+    return entry
+
+
 def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -> FastAPI:
     settings = settings or Settings.from_env()
 
@@ -137,6 +156,10 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
     def require_monthly_log(month: date, today: date) -> None:
         if not journal.has_monthly_log(month, today=today):
             raise HTTPException(404, "months after the current one have no Monthly Log")
+
+    @app.exception_handler(journal.NestingError)
+    def refuse_nesting(request: Request, exc: journal.NestingError) -> Response:
+        return JSONResponse({"detail": str(exc)}, status_code=422)
 
     def render_daily_log(request: Request, session: Session, day: date) -> Response:
         return templates.TemplateResponse(
@@ -180,12 +203,35 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
             )
         return RedirectResponse(f"/days/{on.isoformat()}", status_code=303)
 
+    @app.post("/entries/{entry_id}/nest", response_class=HTMLResponse)
+    def nest_from_page(request: Request, entry_id: int, session: SessionDep) -> Response:
+        entry = _nest(session, entry_id)
+        return _entries_fragment(request, session, journal.daily_log_day(entry))
+
+    @app.post("/entries/{entry_id}/un-nest", response_class=HTMLResponse)
+    def un_nest_from_page(request: Request, entry_id: int, session: SessionDep) -> Response:
+        entry = _un_nest(session, entry_id)
+        return _entries_fragment(request, session, journal.daily_log_day(entry))
+
+    def _entries_fragment(request: Request, session: Session, day: date) -> Response:
+        return templates.TemplateResponse(
+            request, "_entries.html", {"entries": persistence.entries_on(session, day)}
+        )
+
     @app.post("/api/entries", status_code=201)
     def create_entry(body: NewEntryIn, session: SessionDep, today: TodayDep) -> EntryOut:
         entry = persistence.add_entry(
             session, journal.log_entry(body.text, on=body.day or today)
         )
         return EntryOut.model_validate(entry, from_attributes=True)
+
+    @app.post("/api/entries/{entry_id}/nest")
+    def nest_entry(entry_id: int, session: SessionDep) -> EntryOut:
+        return EntryOut.model_validate(_nest(session, entry_id), from_attributes=True)
+
+    @app.post("/api/entries/{entry_id}/un-nest")
+    def un_nest_entry(entry_id: int, session: SessionDep) -> EntryOut:
+        return EntryOut.model_validate(_un_nest(session, entry_id), from_attributes=True)
 
     def daily_log_out(session: Session, day: date) -> DailyLogOut:
         return DailyLogOut(

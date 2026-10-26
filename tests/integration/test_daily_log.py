@@ -170,3 +170,72 @@ def test_the_daily_log_page_shows_signifiers_type_and_time(app_client):
     assert "entry--event" in page.text
     assert '<time datetime="14:30">14:30</time>' in page.text
     assert "dentist" in page.text
+
+
+def _log(client, *texts: str) -> list[int]:
+    return [client.post("/api/entries", json={"text": text}).json()["id"] for text in texts]
+
+
+def _layout(client) -> list[tuple[str, str | None]]:
+    """Today's Daily Log as (text, parent's text) pairs, in display order."""
+    entries = client.get("/api/daily-logs/today").json()["entries"]
+    texts = {entry["id"]: entry["text"] for entry in entries}
+    return [(entry["text"], texts.get(entry["parent_id"])) for entry in entries]
+
+
+def test_a_note_nested_under_a_task_shows_under_it_and_moves_with_it(app_client):
+    with app_client() as client:
+        _, dentist, card = _log(client, "o 9am standup", ". 3pm dentist", "- bring card")
+        nested = client.post(f"/api/entries/{card}/nest")
+        _log(client, "o 10am coffee")
+
+    assert nested.status_code == 200
+    assert nested.json()["parent_id"] == dentist
+
+    with app_client() as client:
+        assert _layout(client) == [
+            ("standup", None),
+            ("coffee", None),
+            ("dentist", None),
+            ("bring card", "dentist"),
+        ]
+
+
+def test_a_nested_note_can_be_un_nested(app_client):
+    with app_client() as client:
+        _, card = _log(client, ". dentist", "- bring card")
+        client.post(f"/api/entries/{card}/nest")
+        un_nested = client.post(f"/api/entries/{card}/un-nest")
+
+    assert un_nested.status_code == 200
+
+    with app_client() as client:
+        assert _layout(client) == [("dentist", None), ("bring card", None)]
+
+
+def test_a_note_cannot_nest_under_a_note_and_a_task_cannot_nest(app_client):
+    with app_client() as client:
+        _, card, cab = _log(client, "- the cafe opens at 7", "- and closes at 3", ". book a cab")
+        under_note = client.post(f"/api/entries/{card}/nest")
+        task = client.post(f"/api/entries/{cab}/nest")
+        layout = _layout(client)
+
+    assert (under_note.status_code, task.status_code) == (422, 422)
+    assert all(parent is None for _, parent in layout)
+
+
+def test_nesting_an_entry_that_does_not_exist_is_not_found(app_client):
+    with app_client() as client:
+        assert client.post("/api/entries/999/nest").status_code == 404
+
+
+def test_nesting_from_the_page_returns_the_daily_log_with_the_note_indented(app_client):
+    with app_client() as client:
+        _, card = _log(client, ". dentist", "- bring card")
+        fragment = client.post(f"/entries/{card}/nest", headers={"HX-Request": "true"})
+        page = client.get("/")
+
+    assert fragment.status_code == 200
+    for html in (fragment.text, page.text):
+        assert html.index("dentist") < html.index("bring card")
+        assert html.count('entry--nested"') == 1

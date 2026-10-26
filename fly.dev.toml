@@ -9,7 +9,7 @@ primary_region = "iad"
 
 # Runs in a throwaway Machine of the new image before any app Machine moves to it.
 [deploy]
-  release_command = "alembic upgrade head"
+  release_command = "dots-and-dashes migrate"
 
 [env]
   SECURE_COOKIES = "on"

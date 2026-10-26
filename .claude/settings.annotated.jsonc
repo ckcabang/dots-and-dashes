@@ -57,6 +57,11 @@
           ".env"
         ]
       },
+      // Added to ~/.claude/settings.json's allowlist: the dev and prod app URLs, so an agent can
+      // check a deploy serves (retro on #7). Deploy runs smoke-test dev themselves either way
+      "network": {
+        "allowedDomains": ["dots-and-dashes-dev.fly.dev", "dots-and-dashes.fly.dev"]
+      },
       // Run OUTSIDE the sandbox with full access and no credential masks, because they need the Docker socket.
       // Only an exact, standalone command matches: a cd/&& or env-var prefix, or any extra argument, runs it sandboxed.
       // Accepted risk: `make test`/`make check` run pytest, so agent-written test code runs outside the sandbox too.

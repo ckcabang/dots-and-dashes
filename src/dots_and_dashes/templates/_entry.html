@@ -1,7 +1,10 @@
-<li class="entry entry--{{ entry.type }} entry--{{ entry.state }}{% if entry.parent_id %} entry--nested{% endif %}" data-entry-id="{{ entry.id }}"{% if entry.parent_id %} data-parent-id="{{ entry.parent_id }}"{% endif %} tabindex="0"
+{%- set markers = {"open": "•", "completed": "×", "cancelled": "•", "event": "○", "note": "–"} -%}
+<li id="entry-{{ entry.id }}" class="entry entry--{{ entry.type }} entry--{{ entry.state }}{% if entry.parent_id %} entry--nested{% endif %}"
+    tabindex="-1" data-id="{{ entry.id }}" data-state="{{ entry.state or '' }}"
+    data-typed="{{ entry | as_typed }}"
     {%- if entry.time is none and not entry.parent_id %} draggable="true"{% endif %}>
   {%- if entry.priority %}<span class="signifier signifier--priority" title="Priority">*</span>{% endif -%}
   {%- if entry.inspiration %}<span class="signifier signifier--inspiration" title="Inspiration">!</span>{% endif -%}
-  <span class="state-marker" title="{{ entry.type | capitalize }}">{{ {"task": "•", "event": "○", "note": "–"}[entry.type] }}</span>
+  <span class="state-marker" title="{{ (entry.state or entry.type) | capitalize }}">{{ markers[entry.state or entry.type] }}</span>
   {%- if entry.time %}<time datetime="{{ entry.time.strftime('%H:%M') }}">{{ entry.time.strftime('%H:%M') }}</time> {% endif -%}
-  {{ entry.text }}</li>
+  <span class="entry-text">{{ entry.text }}</span></li>

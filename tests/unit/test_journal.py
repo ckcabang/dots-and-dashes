@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import UTC, date, datetime, time
 from zoneinfo import ZoneInfo
 
@@ -186,6 +187,129 @@ def _stored(id: int, text: str, at: time | None = None) -> journal.Entry:
         text=text,
         day=date(2026, 10, 25),
     )
+
+
+def _open_task(text: str = "buy milk") -> journal.Entry:
+    return _stored(7, text)
+
+
+def test_completing_an_open_task_marks_it_completed():
+    completed = journal.complete(_open_task())
+
+    assert completed == replace(_open_task(), state=journal.TaskState.COMPLETED)
+
+
+def test_cancelling_an_open_task_marks_it_cancelled():
+    cancelled = journal.cancel(_open_task())
+
+    assert cancelled == replace(_open_task(), state=journal.TaskState.CANCELLED)
+
+
+@pytest.mark.parametrize("act", [journal.complete, journal.cancel])
+def test_a_completed_or_cancelled_task_can_be_reopened(act):
+    reopened = journal.reopen(act(_open_task()))
+
+    assert reopened == _open_task()
+
+
+def test_an_open_task_cannot_be_reopened():
+    with pytest.raises(journal.TaskStateError):
+        journal.reopen(_open_task())
+
+
+@pytest.mark.parametrize(
+    ("first", "then"),
+    [
+        (journal.complete, journal.complete),
+        (journal.complete, journal.cancel),
+        (journal.cancel, journal.cancel),
+        (journal.cancel, journal.complete),
+    ],
+)
+def test_only_an_open_task_can_be_completed_or_cancelled(first, then):
+    with pytest.raises(journal.TaskStateError):
+        then(first(_open_task()))
+
+
+@pytest.mark.parametrize("act", [journal.complete, journal.cancel, journal.reopen])
+def test_an_entry_without_a_task_state_cannot_change_state(act):
+    # Only Tasks have a Task State; Events and Notes have none.
+    stateless = replace(_open_task(), state=None)
+
+    with pytest.raises(journal.TaskStateError):
+        act(stateless)
+
+
+def test_editing_an_entry_replaces_its_text_and_keeps_its_place():
+    edited = journal.edit_entry(_open_task("buy milk"), "  buy oat milk ")
+
+    assert edited == _open_task("buy oat milk")
+
+
+def test_editing_a_task_keeps_its_task_state():
+    edited = journal.edit_entry(journal.complete(_open_task()), "buy oat milk")
+
+    assert edited.state == journal.TaskState.COMPLETED
+
+
+def test_an_entry_cannot_be_edited_to_blank():
+    with pytest.raises(journal.BlankEntryError):
+        journal.edit_entry(_open_task(), "  ")
+
+
+def test_an_entry_is_offered_for_editing_as_it_would_be_typed():
+    # Editing re-reads the text with the Prefix rules, so typing back what
+    # is offered leaves the Entry unchanged.
+    entry = journal.complete(_open_task("buy milk"))
+
+    assert journal.edit_entry(entry, journal.as_typed(entry)) == entry
+
+
+def test_editing_reads_the_prefix_for_signifiers_and_time():
+    edited = journal.edit_entry(_open_task(), "*!. 2:30pm buy oat milk")
+
+    assert edited == replace(
+        _open_task("buy oat milk"), priority=True, inspiration=True, time=time(14, 30)
+    )
+
+
+def test_editing_a_task_into_a_note_drops_its_task_state():
+    edited = journal.edit_entry(journal.complete(_open_task()), "- milk is in the fridge")
+
+    assert (edited.type, edited.state) == (journal.EntryType.NOTE, None)
+
+
+def test_editing_an_event_into_a_task_makes_it_an_open_task():
+    event = replace(_open_task("dinner"), type=journal.EntryType.EVENT, state=None)
+
+    edited = journal.edit_entry(event, ". book dinner")
+
+    assert (edited.type, edited.state) == (journal.EntryType.TASK, journal.TaskState.OPEN)
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        _open_task("buy milk"),
+        _open_task(".5 miles run"),
+        _open_task("- not a Note"),
+        _open_task("9am is not a time here"),
+        _open_task("*not a Signifier"),
+        replace(_open_task("standup"), time=time(9, 0)),
+        replace(_open_task("call mum"), priority=True),
+        replace(
+            _open_task("dinner with Sam"),
+            type=journal.EntryType.EVENT,
+            state=None,
+            inspiration=True,
+            time=time(19, 30),
+        ),
+        replace(_open_task("the cafe opens at 7"), type=journal.EntryType.NOTE, state=None),
+    ],
+    ids=lambda entry: f"{entry.type}:{entry.text}",
+)
+def test_editing_without_changes_leaves_the_entry_as_it_was(entry):
+    assert journal.edit_entry(entry, journal.as_typed(entry)) == entry
 
 
 def _texts(entries: list[journal.Entry]) -> list[str]:
@@ -518,3 +642,17 @@ def test_a_nested_note_moves_only_with_its_parent():
 
     with pytest.raises(journal.NestedNoteMoveError):
         journal.move_entry(daily_log, 2, to=0)
+
+
+def test_editing_a_nested_note_keeps_it_nested():
+    note = _logged(2, NOTE, "bring card", parent_id=1)
+
+    assert journal.edit_entry(note, "- bring insurance card").parent_id == 1
+
+
+def test_editing_a_nested_note_into_a_task_un_nests_it():
+    note = _logged(2, NOTE, "bring card", parent_id=1)
+
+    edited = journal.edit_entry(note, ". bring card")
+
+    assert (edited.type, edited.parent_id) == (TASK, None)

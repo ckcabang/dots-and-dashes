@@ -6,7 +6,7 @@ from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, Form, HTTPException, Request
+from fastapi import Depends, FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -21,6 +21,7 @@ Clock = Callable[[], datetime]
 
 PACKAGE_DIR = Path(__file__).parent
 templates = Jinja2Templates(directory=PACKAGE_DIR / "templates")
+templates.env.filters["as_typed"] = journal.as_typed
 
 
 def _system_clock() -> datetime:
@@ -38,6 +39,10 @@ class MoveIn(BaseModel):
 
 class TimeIn(BaseModel):
     time: time
+
+
+class EditedEntryIn(BaseModel):
+    text: str
 
 
 class EntryOut(BaseModel):
@@ -67,19 +72,44 @@ def _today(request: Request) -> date:
     return journal.today(state.clock(), state.settings.timezone)
 
 
-SessionDep = Annotated[Session, Depends(_session)]
+# Scoped to the function so its writes commit before the response is sent;
+# the default scope would commit after, racing the browser's next request.
+SessionDep = Annotated[Session, Depends(_session, scope="function")]
 TodayDep = Annotated[date, Depends(_today)]
+
+# The Task State changes the keyboard and the API can ask for, by URL name.
+TASK_STATE_CHANGES: dict[str, Callable[[journal.Entry], journal.Entry]] = {
+    "complete": journal.complete,
+    "cancel": journal.cancel,
+    "reopen": journal.reopen,
+}
+
+
+def _change_task_state(session: Session, entry_id: int, change: str) -> journal.Entry:
+    act = TASK_STATE_CHANGES.get(change)
+    if act is None:
+        raise persistence.EntryNotFoundError(f"no Task State change {change!r}")
+    return persistence.save_entry(session, act(persistence.get_entry(session, entry_id)))
+
+
+def _edit(session: Session, entry_id: int, text: str) -> journal.Entry:
+    entry = persistence.get_entry(session, entry_id)
+    return persistence.save_entry(session, journal.edit_entry(entry, text))
+
+
+def _entry_fragment(request: Request, entry: journal.Entry) -> Response:
+    return templates.TemplateResponse(request, "_entry.html", {"entry": entry})
 
 
 def _nest(session: Session, entry_id: int) -> journal.Entry:
-    entry = _existing_entry(session, entry_id)
+    entry = persistence.get_entry(session, entry_id)
     daily_log = persistence.entries_on(session, entry.day)
-    return persistence.set_parent(session, journal.nest_note(entry, daily_log))
+    return persistence.save_entry(session, journal.nest_note(entry, daily_log))
 
 
 def _un_nest(session: Session, entry_id: int) -> journal.Entry:
-    entry = _existing_entry(session, entry_id)
-    return persistence.set_parent(session, journal.un_nest_note(entry))
+    entry = persistence.get_entry(session, entry_id)
+    return persistence.save_entry(session, journal.un_nest_note(entry))
 
 
 def _rearrange(
@@ -89,16 +119,9 @@ def _rearrange(
 ) -> date:
     """Apply an ordering change to the Daily Log holding an Entry, store it,
     and return that Daily Log's day."""
-    day = _existing_entry(session, entry_id).day
+    day = persistence.get_entry(session, entry_id).day
     persistence.save_daily_log(session, change(persistence.entries_on(session, day)))
     return day
-
-
-def _existing_entry(session: Session, entry_id: int) -> journal.Entry:
-    entry = persistence.get_entry(session, entry_id)
-    if entry is None:
-        raise HTTPException(status_code=404, detail="no such Entry")
-    return entry
 
 
 def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -> FastAPI:
@@ -129,6 +152,14 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
     @app.exception_handler(journal.NestingError)
     def refuse_nesting(request: Request, exc: journal.NestingError) -> Response:
         return JSONResponse({"detail": str(exc)}, status_code=422)
+
+    @app.exception_handler(journal.TaskStateError)
+    def refuse_task_state_change(request: Request, exc: journal.TaskStateError) -> Response:
+        return JSONResponse({"detail": str(exc)}, status_code=409)
+
+    @app.exception_handler(persistence.EntryNotFoundError)
+    def entry_not_found(request: Request, exc: persistence.EntryNotFoundError) -> Response:
+        return JSONResponse({"detail": str(exc)}, status_code=404)
 
     def render_daily_log(request: Request, session: Session, day: date) -> Response:
         return templates.TemplateResponse(
@@ -185,6 +216,8 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
             return _entries_fragment(request, session, day)
         return RedirectResponse(f"/days/{day.isoformat()}", status_code=303)
 
+    # The nesting routes come before the Task State ones, whose {change}
+    # would otherwise also match "nest" and "un-nest".
     @app.post("/entries/{entry_id}/nest", response_class=HTMLResponse)
     def nest_from_page(request: Request, entry_id: int, session: SessionDep) -> Response:
         entry = _nest(session, entry_id)
@@ -204,6 +237,27 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
             {"entries": persistence.entries_on(session, day)},
             status_code=status_code,
         )
+
+    @app.post("/entries/{entry_id}/{change}")
+    def change_task_state_on_page(
+        request: Request, entry_id: int, change: str, session: SessionDep
+    ) -> Response:
+        return _entry_fragment(request, _change_task_state(session, entry_id, change))
+
+    @app.post("/entries/{entry_id}")
+    def edit_entry_on_page(
+        request: Request,
+        entry_id: int,
+        text: Annotated[str, Form()],
+        session: SessionDep,
+    ) -> Response:
+        return _entry_fragment(request, _edit(session, entry_id, text))
+
+    @app.delete("/entries/{entry_id}")
+    def delete_entry_on_page(entry_id: int, session: SessionDep) -> Response:
+        persistence.delete_entry(session, entry_id)
+        # HTMX swaps the Entry's line for this empty body.
+        return Response(status_code=200)
 
     @app.post("/api/entries", status_code=201)
     def create_entry(body: NewEntryIn, session: SessionDep, today: TodayDep) -> EntryOut:
@@ -237,6 +291,21 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
     @app.post("/api/entries/{entry_id}/un-nest")
     def un_nest_entry(entry_id: int, session: SessionDep) -> EntryOut:
         return EntryOut.model_validate(_un_nest(session, entry_id), from_attributes=True)
+
+    @app.post("/api/entries/{entry_id}/{change}")
+    def change_task_state(entry_id: int, change: str, session: SessionDep) -> EntryOut:
+        entry = _change_task_state(session, entry_id, change)
+        return EntryOut.model_validate(entry, from_attributes=True)
+
+    @app.patch("/api/entries/{entry_id}")
+    def edit_entry(entry_id: int, body: EditedEntryIn, session: SessionDep) -> EntryOut:
+        entry = _edit(session, entry_id, body.text)
+        return EntryOut.model_validate(entry, from_attributes=True)
+
+    @app.delete("/api/entries/{entry_id}", status_code=204)
+    def delete_entry(entry_id: int, session: SessionDep) -> Response:
+        persistence.delete_entry(session, entry_id)
+        return Response(status_code=204)
 
     def daily_log_out(session: Session, day: date) -> DailyLogOut:
         return DailyLogOut(

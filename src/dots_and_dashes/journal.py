@@ -1,7 +1,7 @@
 """The Journal domain module: every bullet journal rule, with no I/O."""
 
 import re
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, fields, replace
 from datetime import date, datetime, time, tzinfo
 from enum import StrEnum
 
@@ -14,6 +14,8 @@ class EntryType(StrEnum):
 
 class TaskState(StrEnum):
     OPEN = "open"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
 
 
 class BlankEntryError(ValueError):
@@ -22,6 +24,10 @@ class BlankEntryError(ValueError):
 
 class NestingError(ValueError):
     """Raised when an Entry can't be nested where it was asked to be."""
+
+
+class TaskStateError(ValueError):
+    """Raised when an Entry cannot move to the Task State asked for."""
 
 
 @dataclass(frozen=True)
@@ -270,3 +276,69 @@ def move_entry(entries: list[Entry], entry_id: int, *, to: int) -> list[Entry]:
 def today(now: datetime, timezone: tzinfo) -> date:
     """The User's current day: local midnight to midnight, with no rollover hour."""
     return now.astimezone(timezone).date()
+
+
+def _change_state(entry: Entry, *, allowed_from: set[TaskState], to: TaskState) -> Entry:
+    if entry.state not in allowed_from:
+        raise TaskStateError(f"a {entry.state or 'stateless'} Entry cannot become {to}")
+    return replace(entry, state=to)
+
+
+def complete(entry: Entry) -> Entry:
+    """Mark an Open Task Completed (×)."""
+    return _change_state(entry, allowed_from={TaskState.OPEN}, to=TaskState.COMPLETED)
+
+
+def cancel(entry: Entry) -> Entry:
+    """Mark an Open Task Cancelled: a recorded decision to abandon it."""
+    return _change_state(entry, allowed_from={TaskState.OPEN}, to=TaskState.CANCELLED)
+
+
+def reopen(entry: Entry) -> Entry:
+    """Put a Completed or Cancelled Task back to Open."""
+    return _change_state(
+        entry,
+        allowed_from={TaskState.COMPLETED, TaskState.CANCELLED},
+        to=TaskState.OPEN,
+    )
+
+
+def as_typed(entry: Entry) -> str:
+    """The Entry as it would be typed: the inverse of reading text with log_entry.
+
+    Editing offers this text, so it spells out the Prefix (Signifiers, type,
+    time) that log_entry reads back into the same Entry. A plain untimed Task
+    is offered as its bare text, unless that text would itself read as a Prefix.
+    """
+    plain = ParsedEntry(
+        type=EntryType.TASK, priority=False, inspiration=False, time=None, text=entry.text
+    )
+    wanted = ParsedEntry(
+        type=entry.type,
+        priority=entry.priority,
+        inspiration=entry.inspiration,
+        time=entry.time,
+        text=entry.text,
+    )
+    if wanted == plain == read_prefix(entry.text):
+        return entry.text
+    type_character = {kind: char for char, kind in _TYPE_CHARACTERS.items()}[entry.type]
+    prefix = "*" * entry.priority + "!" * entry.inspiration + type_character
+    at = f" {entry.time:%H:%M}" if entry.time else ""
+    return f"{prefix}{at} {entry.text}"
+
+
+def edit_entry(entry: Entry, text: str) -> Entry:
+    """Re-read edited text with the Prefix rules, keeping the Entry's place.
+
+    Everything log_entry reads from text (type, Signifiers, time, text) is
+    replaced. The day stays, a Task that stays a Task keeps its Task State,
+    and a Nested Note stays nested only while it is still a Note.
+    """
+    read = log_entry(text, on=entry.day)
+    changes = {f.name: getattr(read, f.name) for f in fields(read)}
+    del changes["day"]
+    if read.type == entry.type and entry.state is not None:
+        changes["state"] = entry.state
+    parent_id = entry.parent_id if read.type is EntryType.NOTE else None
+    return replace(entry, **changes, parent_id=parent_id)

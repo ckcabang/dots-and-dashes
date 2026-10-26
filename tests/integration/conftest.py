@@ -1,8 +1,8 @@
 """Fixtures for the integration suite.
 
-They run against a real Postgres. Point TEST_DATABASE_URL at one, or let
-`make test` start the test Compose stack, which the default URL targets.
-The test database is created if missing and rebuilt with Alembic once per run.
+They run against a real Postgres named by TEST_DATABASE_URL, which
+`make test` sets to its test Compose stack. The test database is created if
+missing and rebuilt with Alembic once per run.
 """
 
 import os
@@ -17,10 +17,7 @@ from sqlalchemy import create_engine, make_url, text
 
 from dots_and_dashes.settings import Settings
 
-TEST_DATABASE_URL = os.environ.get(
-    "TEST_DATABASE_URL",
-    "postgresql+psycopg://dots:dots@localhost:55432/dots_and_dashes_test",
-)
+TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL", "")
 
 # 03:00 UTC on 26 Oct is still 25 Oct in Los Angeles, so tests that see
 # 2026-10-25 as "today" prove the User's timezone is applied.
@@ -48,6 +45,8 @@ ALEMBIC_INI = Path(__file__).parents[2] / "alembic.ini"
 
 @pytest.fixture(scope="session")
 def database_url() -> str:
+    if not TEST_DATABASE_URL:
+        pytest.exit("Set TEST_DATABASE_URL, or run the tests with `make test`")
     # The schema is dropped below, so never run against a non-test database.
     database = make_url(TEST_DATABASE_URL).database or ""
     if not database.endswith("_test"):

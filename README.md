@@ -16,14 +16,14 @@ Requires [uv](https://docs.astral.sh/uv/) and Docker.
 
 ```sh
 make setup      # install Python 3.12 dependencies and Playwright's Chromium
-make test       # unit, integration and browser tests
+make test       # unit, integration and browser tests (T=path for some only)
 make typecheck  # mypy
 make check      # typecheck, then test
 ```
 
 CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs `make check` on every pull request.
 
-`make test` builds and starts a separate Compose project, `dots-and-dashes-test` (Postgres on port 55432, app on 58000, its own volume), so your dev journal is never touched. Integration tests run against a `dots_and_dashes_test` database on that Postgres, which they create and migrate. Browser tests drive the stack's app container. To point the suites elsewhere, set `TEST_DATABASE_URL` (a SQLAlchemy URL naming a `*_test` database) and `BASE_URL`. Stop the stack with `COMPOSE_PROJECT_NAME=dots-and-dashes-test docker compose down`.
+`make test` builds and starts a Compose project of its own for this checkout (`dots-and-dashes-test-<hash of the path>`, its own volume, host ports the OS picks), so your dev journal is never touched and worktrees can test side by side. Integration tests run against a `dots_and_dashes_test` database on its Postgres, which they create and migrate. Browser tests drive its app container. `make test T=tests/unit` runs some tests only. To run the suites against something else, set `TEST_DATABASE_URL` (a SQLAlchemy URL naming a `*_test` database) and `BASE_URL` and run `uv run pytest`. `make test-logs` shows the stack's logs; `make test-down` stops it and deletes its volume.
 
 | Suite | Path | Seam |
 |---|---|---|

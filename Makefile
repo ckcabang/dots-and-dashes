@@ -4,6 +4,7 @@
 setup:
 	uv sync --locked
 	uv run playwright install chromium
+	git config core.hooksPath .githooks
 
 # Start the app and Postgres at http://localhost:8000.
 up:

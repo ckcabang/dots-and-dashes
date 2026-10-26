@@ -1,15 +1,43 @@
 {% extends "base.html" %}
 
 {% block content %}
+<nav class="day-nav" aria-label="Days">
+  <a id="previous-day" href="/days/{{ previous_day.isoformat() }}" aria-keyshortcuts="[">← Previous day</a>
+  <form method="get" action="/days">
+    <input type="date" name="date" value="{{ day.isoformat() }}" aria-label="Go to date" required>
+    <button>Go</button>
+  </form>
+  <a id="next-day" href="/days/{{ next_day.isoformat() }}" aria-keyshortcuts="]">Next day →</a>
+</nav>
+
 <h1><time datetime="{{ day.isoformat() }}">{{ day.strftime("%A, %-d %B %Y") }}</time></h1>
 
 <form method="post" action="/entries"
       hx-post="/entries" hx-target="#entries" hx-swap="beforeend"
       hx-on::after-request="if (event.detail.successful) this.reset()">
+  <input type="hidden" name="day" value="{{ day.isoformat() }}">
   <input name="text" aria-label="New entry" autocomplete="off" autofocus required pattern=".*\S.*">
 </form>
 
 <ul id="entries" class="entries">
   {% for entry in entries %}{% include "_entry.html" %}{% endfor %}
 </ul>
+
+<script>
+  // [ and ] go to the previous and next day. They are shortcuts only outside
+  // text fields, so they can still be typed into an Entry; Escape leaves one.
+  document.addEventListener("keydown", (event) => {
+    const field = event.target.closest("input, textarea, select, [contenteditable]");
+    if (event.key === "Escape" && field) {
+      field.blur();
+      return;
+    }
+    if (field || event.ctrlKey || event.metaKey || event.altKey) return;
+    const link = { "[": "previous-day", "]": "next-day" }[event.key];
+    if (link) {
+      event.preventDefault();
+      document.getElementById(link).click();
+    }
+  });
+</script>
 {% endblock %}

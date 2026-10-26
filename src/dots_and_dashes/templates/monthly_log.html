@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+
+{% block title %}{{ month.strftime("%B %Y") }} · Dots & Dashes{% endblock %}
+
+{% block content %}
+<nav class="day-nav" aria-label="Months">
+  <a href="/months/{{ previous_month.strftime('%Y-%m') }}">← Previous month</a>
+  <a href="/future">Future Log</a>
+  {% if next_month %}<a href="/months/{{ next_month.strftime('%Y-%m') }}">Next month →</a>{% else %}<span></span>{% endif %}
+</nav>
+
+<h1><time datetime="{{ month.strftime('%Y-%m') }}">{{ month.strftime("%B %Y") }}</time></h1>
+
+<section aria-labelledby="calendar-heading">
+  <h2 id="calendar-heading">Calendar</h2>
+  <ol class="calendar">
+    {% for calendar_day in calendar %}
+    <li>
+      <a href="/days/{{ calendar_day.day.isoformat() }}"><time datetime="{{ calendar_day.day.isoformat() }}">{{ calendar_day.day.day }} {{ calendar_day.day.strftime("%a")[0] }}</time></a>
+      {% for entry in calendar_day.events %}{% if not loop.first %}; {% endif %}{% if entry.time %}{{ entry.time.strftime('%H:%M') }} {% endif %}{{ entry.text }}{% endfor %}
+    </li>
+    {% endfor %}
+  </ol>
+</section>
+
+<section aria-labelledby="tasks-heading">
+  <h2 id="tasks-heading">Tasks</h2>
+  <form method="post" action="/months/{{ month.strftime('%Y-%m') }}/entries">
+    <input name="text" aria-label="New entry" autocomplete="off" autofocus required pattern=".*\S.*">
+  </form>
+  <ul class="entries">
+    {% for entry in tasks %}{% include "_entry.html" %}{% endfor %}
+  </ul>
+</section>
+{% endblock %}

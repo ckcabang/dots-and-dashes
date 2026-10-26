@@ -2,5 +2,6 @@
   {%- if entry.priority %}<span class="signifier signifier--priority" title="Priority">*</span>{% endif -%}
   {%- if entry.inspiration %}<span class="signifier signifier--inspiration" title="Inspiration">!</span>{% endif -%}
   <span class="state-marker" title="{{ entry.type | capitalize }}">{{ {"task": "•", "event": "○", "note": "–"}[entry.type] }}</span>
+  {%- if entry.location == "future" and entry.day %}<time class="future-date" datetime="{{ entry.day.isoformat() }}">{{ entry.day.strftime("%-d %b") }}</time> {% endif -%}
   {%- if entry.time %}<time datetime="{{ entry.time.strftime('%H:%M') }}">{{ entry.time.strftime('%H:%M') }}</time> {% endif -%}
   {{ entry.text }}</li>

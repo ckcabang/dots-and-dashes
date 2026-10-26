@@ -6,11 +6,11 @@ from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, Form, Request
+from fastapi import Depends, FastAPI, Form, HTTPException, Path as PathParam, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -40,12 +40,60 @@ class EntryOut(BaseModel):
     inspiration: bool
     time: time | None
     text: str
-    day: date
+    day: date | None
+    location: journal.Location
+    month: date | None
 
 
 class DailyLogOut(BaseModel):
     date: date
     entries: list[EntryOut]
+
+
+class MonthEntryIn(BaseModel):
+    text: str
+
+
+class FutureEntryIn(BaseModel):
+    text: str
+    month: str = Field(pattern=r"^\d{4}-\d{2}$")
+    on: date | None = Field(None, alias="date")
+
+
+class CalendarDayOut(BaseModel):
+    date: date
+    events: list[EntryOut]
+
+
+class MonthlyLogOut(BaseModel):
+    month: str
+    calendar: list[CalendarDayOut]
+    tasks: list[EntryOut]
+
+
+class FutureMonthOut(BaseModel):
+    month: str
+    entries: list[EntryOut]
+
+
+class FutureLogOut(BaseModel):
+    months: list[FutureMonthOut]
+
+
+def _parse_month(value: str) -> date:
+    """Read a month written YYYY-MM as the date of its first day."""
+    try:
+        return date.fromisoformat(f"{value}-01")
+    except ValueError:
+        raise HTTPException(422, f"{value!r} is not a month") from None
+
+
+def _month_param(month: Annotated[str, PathParam(pattern=r"^\d{4}-\d{2}$")]) -> date:
+    return _parse_month(month)
+
+
+def _out(entry: journal.Entry) -> EntryOut:
+    return EntryOut.model_validate(entry, from_attributes=True)
 
 
 def _session(request: Request) -> Iterator[Session]:
@@ -60,6 +108,7 @@ def _today(request: Request) -> date:
 
 SessionDep = Annotated[Session, Depends(_session)]
 TodayDep = Annotated[date, Depends(_today)]
+MonthDep = Annotated[date, Depends(_month_param)]
 
 
 def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -> FastAPI:
@@ -80,6 +129,14 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
     @app.exception_handler(journal.BlankEntryError)
     def refuse_blank_entry(request: Request, exc: journal.BlankEntryError) -> Response:
         return JSONResponse({"detail": str(exc)}, status_code=422)
+
+    @app.exception_handler(journal.PlacementError)
+    def refuse_misplaced_entry(request: Request, exc: journal.PlacementError) -> Response:
+        return JSONResponse({"detail": str(exc)}, status_code=422)
+
+    def require_monthly_log(month: date, today: date) -> None:
+        if not journal.has_monthly_log(month, today=today):
+            raise HTTPException(404, "months after the current one have no Monthly Log")
 
     def render_daily_log(request: Request, session: Session, day: date) -> Response:
         return templates.TemplateResponse(
@@ -147,5 +204,122 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
     @app.get("/api/daily-logs/{day}")
     def daily_log(day: date, session: SessionDep) -> DailyLogOut:
         return daily_log_out(session, day)
+
+    @app.get("/months")
+    def current_monthly_log_page(today: TodayDep) -> Response:
+        return RedirectResponse(f"/months/{today:%Y-%m}", status_code=303)
+
+    @app.get("/months/{month}", response_class=HTMLResponse)
+    def monthly_log_page(
+        request: Request, month: MonthDep, session: SessionDep, today: TodayDep
+    ) -> Response:
+        require_monthly_log(month, today)
+        calendar, tasks = persistence.monthly_log(session, month)
+        next_month = journal.next_month(month)
+        return templates.TemplateResponse(
+            request,
+            "monthly_log.html",
+            {
+                "month": month,
+                "previous_month": (month - timedelta(days=1)).replace(day=1),
+                "next_month": next_month
+                if journal.has_monthly_log(next_month, today=today)
+                else None,
+                "calendar": calendar,
+                "tasks": tasks,
+            },
+        )
+
+    @app.post("/months/{month}/entries")
+    def add_to_monthly_log(
+        month: MonthDep,
+        text: Annotated[str, Form()],
+        session: SessionDep,
+        today: TodayDep,
+    ) -> Response:
+        persistence.add_entry(
+            session, journal.log_month_entry(text, month=month, today=today)
+        )
+        return RedirectResponse(f"/months/{month:%Y-%m}", status_code=303)
+
+    @app.get("/api/monthly-logs/{month}")
+    def monthly_log(month: MonthDep, session: SessionDep, today: TodayDep) -> MonthlyLogOut:
+        require_monthly_log(month, today)
+        calendar, tasks = persistence.monthly_log(session, month)
+        return MonthlyLogOut(
+            month=f"{month:%Y-%m}",
+            calendar=[
+                CalendarDayOut(date=day.day, events=[_out(e) for e in day.events])
+                for day in calendar
+            ],
+            tasks=[_out(entry) for entry in tasks],
+        )
+
+    @app.post("/api/monthly-logs/{month}/entries", status_code=201)
+    def create_monthly_log_entry(
+        month: MonthDep, body: MonthEntryIn, session: SessionDep, today: TodayDep
+    ) -> EntryOut:
+        return _out(
+            persistence.add_entry(
+                session, journal.log_month_entry(body.text, month=month, today=today)
+            )
+        )
+
+    @app.get("/future", response_class=HTMLResponse)
+    def future_log_page(request: Request, session: SessionDep, today: TodayDep) -> Response:
+        return templates.TemplateResponse(
+            request,
+            "future_log.html",
+            {
+                "today": today,
+                "first_month": journal.next_month(journal.month_of(today)),
+                "future_log": persistence.future_log(session, today),
+            },
+        )
+
+    @app.post("/future/entries")
+    def add_to_future_log(
+        text: Annotated[str, Form()],
+        month: Annotated[str, Form(pattern=r"^\d{4}-\d{2}$")],
+        session: SessionDep,
+        today: TodayDep,
+        # An empty date field reads as no date.
+        on: Annotated[date | None, Form(alias="date")] = None,
+    ) -> Response:
+        persistence.add_entry(
+            session,
+            journal.log_future_entry(
+                text,
+                month=_parse_month(month),
+                on=on,
+                today=today,
+            ),
+        )
+        return RedirectResponse("/future", status_code=303)
+
+    @app.get("/api/future-log")
+    def future_log(session: SessionDep, today: TodayDep) -> FutureLogOut:
+        return FutureLogOut(
+            months=[
+                FutureMonthOut(
+                    month=f"{bucket.month:%Y-%m}",
+                    entries=[_out(entry) for entry in bucket.entries],
+                )
+                for bucket in persistence.future_log(session, today)
+            ]
+        )
+
+    @app.post("/api/future-log/entries", status_code=201)
+    def create_future_log_entry(
+        body: FutureEntryIn, session: SessionDep, today: TodayDep
+    ) -> EntryOut:
+        return _out(
+            persistence.add_entry(
+                session,
+                journal.log_future_entry(
+                    body.text, month=_parse_month(body.month), on=body.on, today=today
+                ),
+            )
+        )
 
     return app

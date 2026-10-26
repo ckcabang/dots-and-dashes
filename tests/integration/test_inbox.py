@@ -93,10 +93,10 @@ def test_triage_to_a_date_lands_on_its_daily_log_this_month_or_in_the_future_log
         triaged = client.post(
             f"/api/captures/{capture_id}/triage", json={"to": "date", "date": on}
         )
-        assert triaged.status_code == 201
+        assert triaged.status_code == 201, triaged.text
 
-    assert _texts(client.get("/api/daily-logs/2026-10-28").json()["entries"]) == ["dentist"]
-    future_log = client.get("/api/future-log").json()
+    assert _texts(_read(client, "/api/daily-logs/2026-10-28")["entries"]) == ["dentist"]
+    future_log = _read(client, "/api/future-log")
     [march] = [bucket for bucket in future_log["months"] if bucket["month"] == "2027-03"]
     assert [(e["text"], e["day"]) for e in march["entries"]] == [("conference", "2027-03-03")]
 

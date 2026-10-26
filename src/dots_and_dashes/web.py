@@ -155,12 +155,17 @@ class LeftoverDayOut(BaseModel):
     tasks: list[EntryOut]
 
 
+class WaitingEventOut(BaseModel):
+    event: EntryOut
+    notes: list[EntryOut]
+
+
 class MonthlyReviewOut(BaseModel):
     month: str
     task_list: list[EntryOut]
     days: list[LeftoverDayOut]
     to_pull: list[EntryOut]
-    needs_a_date: list[EntryOut]
+    needs_a_date: list[WaitingEventOut]
 
 
 def _parse_month(value: str) -> date:
@@ -302,13 +307,29 @@ def _monthly_review_out(review: journal.MonthlyReview) -> MonthlyReviewOut:
             for day in review.days
         ],
         to_pull=[_out(entry) for entry in review.to_pull],
-        needs_a_date=[_out(entry) for entry in review.needs_a_date],
+        needs_a_date=[
+            WaitingEventOut(event=_out(w.event), notes=[_out(note) for note in w.notes])
+            for w in review.needs_a_date
+        ],
     )
 
 
 def _move_event(session: Session, entry_id: int, on: date) -> journal.Entry:
     event = persistence.get_entry(session, entry_id)
     moved, notes = journal.move_event(event, persistence.nested_notes(session, entry_id), on=on)
+    return _store_moved_event(session, moved, notes)
+
+
+def _date_waiting_event(session: Session, entry_id: int, on: date, today: date) -> None:
+    event = persistence.get_entry(session, entry_id)
+    nested_notes = persistence.nested_notes(session, entry_id)
+    moved, notes = journal.date_waiting_event(event, nested_notes, on=on, today=today)
+    _store_moved_event(session, moved, notes)
+
+
+def _store_moved_event(
+    session: Session, moved: journal.Entry, notes: list[journal.Entry]
+) -> journal.Entry:
     saved = persistence.save_entry(session, moved)
     _place(session, saved)
     for note in notes:
@@ -692,7 +713,6 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
                     "today": today,
                     "review": review,
                     "last_month": journal.previous_month(review.month),
-                    "last_day": journal.next_month(review.month) - timedelta(days=1),
                 },
             )
 
@@ -706,8 +726,9 @@ def create_app(settings: Settings | None = None, clock: Clock = _system_clock) -
             entry_id: int,
             on: Annotated[date, Form(alias="date")],
             session: SessionDep,
+            today: TodayDep,
         ) -> Response:
-            _move_event(session, entry_id, on)
+            _date_waiting_event(session, entry_id, on, today)
             return RedirectResponse("/monthly-review", status_code=303)
 
         @app.get("/api/monthly-review")

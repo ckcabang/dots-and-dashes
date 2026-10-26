@@ -120,7 +120,8 @@ def test_pulling_brings_this_months_future_log_into_the_monthly_log(october, nov
 
     assert _texts(before["to_pull"]) == ["flu jab", "wedding", "renew passport", "book holiday"]
     assert pulled.status_code == 200
-    assert (after["to_pull"], _texts(after["needs_a_date"])) == ([], ["leaving party"])
+    assert after["to_pull"] == []
+    assert [w["event"]["text"] for w in after["needs_a_date"]] == ["leaving party"]
     tasks = november.get("/api/monthly-logs/2026-11").json()["tasks"]
     assert [(t["text"], t["state"], t["migration_count"]) for t in tasks] == [
         ("renew passport", "open", 1),
@@ -165,12 +166,12 @@ def test_the_monthly_review_still_works_when_opened_after_the_first(october, fla
         review = twelfth.get("/api/monthly-review").json()
         twelfth.post("/api/monthly-review/pull")
         page = twelfth.get("/monthly-review")
-        tasks = twelfth.get("/api/monthly-logs/2026-11").json()["tasks"]
+        today = twelfth.get("/api/daily-logs/today").json()["entries"]
 
     assert [_texts(d["tasks"]) for d in review["days"]] == [["write report"]]
     assert page.status_code == 200 and "write report" in page.text
-    # The day it was dated has passed, so it lands on the task list.
-    assert _texts(tasks) == ["flu jab"]
+    # The day it was dated has passed, and a Task only moves forward.
+    assert _texts(today) == ["flu jab"]
 
 
 def test_the_review_page_pulls_and_returns_to_the_review(october, november):
@@ -184,3 +185,23 @@ def test_the_review_page_pulls_and_returns_to_the_review(october, november):
     assert _texts(november.get("/api/monthly-logs/2026-11").json()["tasks"]) == [
         "renew passport"
     ]
+
+
+def test_a_waiting_event_is_given_a_day_this_month_only(october, november):
+    party = _log_future(october, "o leaving party")
+
+    page = november.get("/monthly-review").text
+    refused = november.post(f"/monthly-review/entries/{party}/date", data={"date": "2026-12-04"})
+
+    assert f'action="/monthly-review/entries/{party}/date"' in page
+    assert 'max="2026-11-30"' in page
+    assert refused.status_code == 422
+    assert len(november.get("/api/monthly-review").json()["needs_a_date"]) == 1
+
+
+def test_a_future_log_event_is_not_moved_by_changing_its_date_outside_the_review(october):
+    party = _log_future(october, "o leaving party")
+
+    refused = october.post(f"/api/entries/{party}/date", json={"date": "2026-11-20"})
+
+    assert refused.status_code == 422

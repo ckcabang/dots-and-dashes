@@ -15,7 +15,7 @@
     <h2 id="leftovers-heading">{{ last_month.strftime("%B") }}'s Open Tasks</h2>
     <p>
       <kbd>x</kbd> complete, <kbd>m</kbd> migrate to the day being planned,
-      <kbd>M</kbd> migrate to {{ review.month.strftime("%B") }}'s task list,
+      <kbd>M</kbd> migrate to the month's task list,
       <kbd>s</kbd> schedule, <kbd>c</kbd> cancel.
     </p>
     {% if review.task_list %}
@@ -50,14 +50,14 @@
     {% endif %}
     {% if review.needs_a_date %}
     <h3>Events waiting for a date</h3>
-    <ul id="entries-needs-a-date" class="entries">
-      {% for entry in review.needs_a_date %}{% include "_entry.html" %}{% endfor %}
+    {% for waiting in review.needs_a_date %}
+    <ul id="entries-needs-a-date-{{ waiting.event.id }}" class="entries">
+      {% for entry in [waiting.event] + waiting.notes %}{% include "_entry.html" %}{% endfor %}
     </ul>
-    {% for event in review.needs_a_date if not event.parent_id %}
-    <form method="post" action="/monthly-review/entries/{{ event.id }}/date">
-      <input type="date" name="date" aria-label="Date for {{ event.text }}"
-             min="{{ review.month.isoformat() }}" max="{{ last_day.isoformat() }}" required>
-      <button>Move {{ event.text }} onto its day</button>
+    <form method="post" action="/monthly-review/entries/{{ waiting.event.id }}/date">
+      <input type="date" name="date" aria-label="Date for {{ waiting.event.text }}"
+             min="{{ review.month.isoformat() }}" max="{{ review.last_day.isoformat() }}" required>
+      <button>Move {{ waiting.event.text }} onto its day</button>
     </form>
     {% endfor %}
     {% endif %}

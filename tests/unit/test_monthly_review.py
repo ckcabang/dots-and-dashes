@@ -2,6 +2,8 @@
 
 from datetime import date, time
 
+import pytest
+
 from dots_and_dashes import journal
 
 TASK, EVENT, NOTE = journal.EntryType.TASK, journal.EntryType.EVENT, journal.EntryType.NOTE
@@ -123,15 +125,15 @@ def test_pulling_a_dated_task_copies_it_onto_its_day_marked_migrated_with_its_ti
     assert migration.copy.time == time(9, 30)
 
 
-def test_opened_after_the_first_a_task_dated_earlier_this_month_goes_on_the_task_list():
+def test_opened_after_the_first_a_task_dated_a_day_already_past_lands_on_today():
     passed = _future(1, "flu jab", on=date(2026, 11, 3))
-    due_today = _future(2, "pay rent", on=date(2026, 11, 12))
+    later = _future(2, "pay rent", on=date(2026, 11, 20))
 
-    pull = journal.pull_from_future_log([passed, due_today], today=date(2026, 11, 12))
+    pull = journal.pull_from_future_log([passed, later], today=date(2026, 11, 12))
 
     assert [_where(m.copy) for m in pull.migrations] == [
-        (MONTH, None, NOVEMBER),
         (DAY, date(2026, 11, 12), None),
+        (DAY, date(2026, 11, 20), None),
     ]
 
 
@@ -167,7 +169,7 @@ def test_an_undated_event_waits_in_the_review_for_a_date():
     review = journal.monthly_review([party], today=FIRST)
 
     assert (pull.migrations, pull.moved) == ([], [])
-    assert _texts(review.needs_a_date) == ["leaving party"]
+    assert [w.event.text for w in review.needs_a_date] == ["leaving party"]
 
 
 def test_only_this_months_open_tasks_events_and_notes_are_pulled():
@@ -191,12 +193,15 @@ def test_the_review_lists_what_the_pull_will_bring_in_with_nested_notes():
         _future(2, "bring a gift", type=NOTE, parent_id=1),
         _future(3, "renew passport", on=date(2026, 11, 3)),
         _future(4, "leaving party", type=EVENT),
+        _future(5, "book the pub", type=NOTE, parent_id=4),
     ]
 
     review = journal.monthly_review(entries, today=FIRST)
 
     assert _texts(review.to_pull) == ["renew passport", "wedding", "bring a gift"]
-    assert _texts(review.needs_a_date) == ["leaving party"]
+    assert [(w.event.text, _texts(w.notes)) for w in review.needs_a_date] == [
+        ("leaving party", ["book the pub"])
+    ]
 
 
 def test_pulling_twice_pulls_nothing_more():
@@ -208,9 +213,50 @@ def test_pulling_twice_pulls_nothing_more():
     assert (again.migrations, again.moved) == ([], [])
 
 
-def test_an_undated_future_log_event_moves_onto_the_day_it_is_given():
+def test_an_undated_event_moves_onto_the_day_it_is_given_with_its_nested_notes():
+    party = _future(1, "leaving party", type=EVENT)
+    note = _future(2, "book the pub", type=NOTE, parent_id=1)
+
+    event, notes = journal.date_waiting_event(party, [note], on=date(2026, 11, 20), today=FIRST)
+
+    assert _where(event) == (DAY, date(2026, 11, 20), None)
+    assert [(*_where(n), n.parent_id) for n in notes] == [(DAY, date(2026, 11, 20), None, 1)]
+
+
+@pytest.mark.parametrize(
+    "on",
+    [pytest.param(date(2026, 10, 31), id="last month"), pytest.param(date(2026, 12, 1), id="next")],
+)
+def test_an_undated_event_is_given_a_day_this_month(on):
     party = _future(1, "leaving party", type=EVENT)
 
-    moved, _ = journal.move_event(party, [], on=date(2026, 11, 20))
+    with pytest.raises(journal.DateOutsideMonthError):
+        journal.date_waiting_event(party, [], on=on, today=FIRST)
 
-    assert _where(moved) == (DAY, date(2026, 11, 20), None)
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        pytest.param(_future(1, "wedding", type=EVENT, on=date(2026, 11, 14)), id="dated"),
+        pytest.param(_entry(1, "dentist", type=EVENT, day=date(2026, 11, 3)), id="daily log"),
+        pytest.param(
+            _entry(1, "party", type=EVENT, location=FUTURE, month=date(2026, 12, 1)),
+            id="later month",
+        ),
+        pytest.param(_future(1, "renew passport"), id="task"),
+    ],
+)
+def test_only_an_undated_event_waiting_in_the_review_is_given_a_day_by_it(entry):
+    with pytest.raises(journal.MigrationError):
+        journal.date_waiting_event(entry, [], on=date(2026, 11, 20), today=FIRST)
+
+
+def test_a_future_log_event_still_cannot_be_moved_like_a_daily_log_one():
+    party = _future(1, "leaving party", type=EVENT)
+
+    with pytest.raises(journal.NotOnADailyLogError):
+        journal.move_event(party, [], on=date(2026, 11, 20))
+
+
+def test_the_review_knows_the_last_day_of_its_month():
+    assert journal.monthly_review([], today=date(2027, 2, 10)).last_day == date(2027, 2, 28)

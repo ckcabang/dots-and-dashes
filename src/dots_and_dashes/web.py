@@ -2,7 +2,7 @@
 
 from collections.abc import Callable, Iterator
 from contextlib import asynccontextmanager
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from typing import Annotated
 
@@ -36,6 +36,9 @@ class EntryOut(BaseModel):
     id: int
     type: journal.EntryType
     state: journal.TaskState | None
+    priority: bool
+    inspiration: bool
+    time: time | None
     text: str
     day: date
 

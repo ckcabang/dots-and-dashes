@@ -132,3 +132,41 @@ def test_an_entry_created_through_the_api_can_go_on_any_day(app_client):
 
     assert created.json()["day"] == "2026-10-31"
     assert [entry["text"] for entry in viewed["entries"]] == ["pack bags"]
+
+
+def test_the_prefix_sets_signifiers_type_and_time_on_todays_daily_log(app_client):
+    with app_client() as client:
+        for text in ["*!- idea", "o 7pm dinner", "*. 14:00 call mom", ".5 miles run"]:
+            assert client.post("/api/entries", json={"text": text}).status_code == 201
+
+    with app_client() as client:
+        daily_log = client.get("/api/daily-logs/today").json()
+
+    assert [
+        (
+            entry["type"],
+            entry["state"],
+            entry["priority"],
+            entry["inspiration"],
+            entry["time"],
+            entry["text"],
+        )
+        for entry in daily_log["entries"]
+    ] == [
+        ("note", None, True, True, None, "idea"),
+        ("task", "open", True, False, "14:00:00", "call mom"),
+        ("task", "open", False, False, None, ".5 miles run"),
+        ("event", None, False, False, "19:00:00", "dinner"),
+    ]
+
+
+def test_the_daily_log_page_shows_signifiers_type_and_time(app_client):
+    with app_client() as client:
+        client.post("/entries", data={"text": "*!o 2:30pm dentist"})
+        page = client.get("/")
+
+    assert 'class="signifier signifier--priority"' in page.text
+    assert 'class="signifier signifier--inspiration"' in page.text
+    assert "entry--event" in page.text
+    assert '<time datetime="14:30">14:30</time>' in page.text
+    assert "dentist" in page.text

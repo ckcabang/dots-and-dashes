@@ -297,7 +297,7 @@
           "datasourceUid": "${PROMETHEUS_UID}",
           "model": {
             "refId": "A",
-            "expr": "min(avg_over_time(probe_success{job=\"dots-and-dashes-canary\"}[5m]))",
+            "expr": "group by (image) (last_over_time(entry_saves_total{job=\"prod/dots-and-dashes\"}[5m])) * 0 + on() group_left() min(avg_over_time(probe_success{job=\"dots-and-dashes-canary\"}[5m])) or on() min(avg_over_time(probe_success{job=\"dots-and-dashes-canary\"}[5m]))",
             "instant": true,
             "range": false,
             "editorMode": "code",
@@ -344,11 +344,11 @@
       },
       "annotations": {
         "summary": "The canary is failing on prod",
-        "description": "The canary passed {{ humanizePercentage $values.A.Value }} of its runs on prod over the last 5 minutes (threshold 80%), or stopped reporting. It logs in as the Canary User, then saves, reads back and deletes an Entry; the check's logs name the step that failed.",
+        "description": "The canary passed {{ humanizePercentage $values.A.Value }} of its runs on prod over the last 5 minutes (threshold 80%), or stopped reporting. It logs in as the Canary User, then saves, reads back and deletes an Entry; the check's logs name the step that failed. Image: {{ if $labels.image }}{{ $labels.image }}{{ else }}none, prod saved nothing in 5 minutes{{ end }}.",
         "environment": "prod",
-        "image": "not known to the probe: the dashboard's Image filter lists the images serving prod",
+        "image": "{{ if $labels.image }}{{ $labels.image }}{{ else }}none: prod saved nothing in 5 minutes{{ end }}",
         "runbook_url": "https://github.com/ckcabang/dots-and-dashes/blob/main/docs/runbooks/README.md#alert-canary-failing",
-        "dashboard_url": "${GRAFANA_URL}/d/dots-and-dashes-key-journey?var-env=prod&var-image=All",
+        "dashboard_url": "${GRAFANA_URL}/d/dots-and-dashes-key-journey?var-env=prod&var-image={{ if $labels.image }}{{ $labels.image | urlquery }}{{ else }}$__all{{ end }}",
         "__dashboardUid__": "dots-and-dashes-key-journey",
         "__panelId__": "4"
       }

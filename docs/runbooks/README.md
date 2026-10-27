@@ -34,7 +34,7 @@ Every notification carries the environment, the image, a link to the dashboard f
 ## Alert: Canary failing
 
 - **Means**: the Synthetic Monitoring check `dots-and-dashes-canary` (the script is `monitoring/canary.js`) failed at least 2 of its last 5 runs, or stopped reporting. It logs in as the Canary User and expects 303, saves an Entry (201), reads it back (200) and deletes it (204). A lost login answers 401, which the save metrics count as refused, so this is the only alert that sees it.
-- **First look**: the check's logs in Synthetic Monitoring name the step and status that failed. A failed save also shows on the save alerts; a 401 on the save, or a log in that isn't 303, means the Canary User's login broke: its password must match the `canary-password` Synthetic Monitoring secret (`scripts/provision-canary`). The image serving prod is on the dashboard's Image filter; the probe can't know it, so this notification doesn't carry it.
+- **First look**: the check's logs in Synthetic Monitoring name the step and status that failed. A failed save also shows on the save alerts; a 401 on the save, or a log in that isn't 303, means the Canary User's login broke: its password must match the `canary-password` Synthetic Monitoring secret (`scripts/provision-canary`). The probe can't know the image, so the rule joins its pass rate with the images prod's save metrics carried over the same 5 minutes: one notification per image serving prod, or one naming no image when prod saved nothing (the app down).
 
 The On-call agent (`.claude/agents/on-call.md`) applies only the three remedies below (ADR-0002). Anything else goes to the human through an incident issue labelled `ready-for-human`.
 

@@ -116,6 +116,24 @@ def test_a_save_alert_names_the_image_whose_saves_it_fired_on(alert):
     assert "var-image={{ $labels.image | urlquery }}" in rule["annotations"]["dashboard_url"]
 
 
+def test_the_canary_alert_names_the_image_prod_is_serving():
+    """The probe can't know the image, so the rule joins it with the images
+    prod's save metrics carry, and still fires with none (the app down)."""
+    rule = _rules()["dnd-canary-failing-prod"]
+    probe = 'min(avg_over_time(probe_success{job="dots-and-dashes-canary"}[5m]))'
+
+    assert _query(rule) == (
+        'group by (image) (last_over_time(entry_saves_total{job="prod/dots-and-dashes"}[5m]))'
+        f" * 0 + on() group_left() {probe} or on() {probe}"
+    )
+    assert "{{ $labels.image | urlquery }}" in rule["annotations"]["dashboard_url"]
+
+
+@pytest.mark.parametrize("uid", list(_rules()))
+def test_every_notification_takes_its_image_from_the_alerts_labels(uid):
+    assert "{{ $labels.image }}" in _rules()[uid]["annotations"]["image"]
+
+
 def test_the_rules_read_prometheus_through_the_uid_the_wizard_fills_in():
     for rule in _rules().values():
         (query,) = [d for d in rule["data"] if d["datasourceUid"] != "__expr__"]

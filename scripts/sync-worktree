@@ -92,18 +92,22 @@ if [[ ${1:-} == --continue ]]; then
         printf '  %s\n' "${missing[@]}" >&2
         exit 1
     fi
+    # Every new file gets staged except the ones already untracked before the
+    # merge started, so check those too: one may be a conflicted file moved to
+    # a new name before it was resolved.
+    mapfile -d '' -t new < <(
+        comm -z -13 <(sort -z "$state/untracked") \
+            <(git ls-files -z -o --exclude-standard -- . ':!.claude' | sort -z))
+    files+=("${new[@]}")
     # With no paths, git grep would search the whole worktree.
     if (( ${#files[@]} )) &&
         git --literal-pathspecs grep --no-index -nE '^(<<<<<<<|>>>>>>>)( |$)' -- "${files[@]}" >&2; then
         echo "sync-worktree: conflict markers remain; resolve them, then re-run --continue." >&2
         exit 1
     fi
-    # Stage everything changed while resolving, and every new file except the
-    # ones that were already untracked before the merge started.
+    # Stage everything changed while resolving, and the new files.
     git add -u -- . ':!.claude'
-    comm -z -13 <(sort -z "$state/untracked") \
-        <(git ls-files -z -o --exclude-standard -- . ':!.claude' | sort -z) \
-        | xargs -0 -r git --literal-pathspecs add --
+    (( ! ${#new[@]} )) || git --literal-pathspecs add -- "${new[@]}"
     commit=$(git commit-tree "$(git write-tree)" -p HEAD -p "$target" -F "$state/message")
     git reset -q --mixed "$commit"
     skip_claude

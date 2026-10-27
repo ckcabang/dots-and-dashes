@@ -1,0 +1,149 @@
+#!/usr/bin/env python3
+"""The On-call agent's three remedies (ADR-0002), and nothing else.
+
+    scripts/on-call/remedy rollback   <dev|prod> --from <image the alert names>
+    scripts/on-call/remedy flag-off   <dev|prod> <FLAG_...>
+    scripts/on-call/remedy raise-pool <dev|prod> <size> --above <db.client.connection.max>
+
+Each runs flyctl with that environment's own deploy token, from
+FLY_DEV_API_TOKEN or FLY_PROD_API_TOKEN (without one, flyctl's own login).
+docs/runbooks/README.md gives when to use each.
+"""
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+ROOT = Path(__file__).resolve().parents[2]
+ENVIRONMENTS = {
+    "dev": {"app": "dots-and-dashes-dev", "config": "fly.dev.toml", "token": "FLY_DEV_API_TOKEN"},
+    "prod": {"app": "dots-and-dashes", "config": "fly.prod.toml", "token": "FLY_PROD_API_TOKEN"},
+}
+# DB_POOL_SIZE times the Machines must stay under Postgres's max_connections
+# (100), less a few for migrations and psql: 40 leaves room for two Machines.
+MAX_POOL_SIZE = 40
+
+
+class Refused(Exception):
+    """The remedy would do something it mustn't: nothing was changed."""
+
+
+def flyctl(env: str, *args: str, capture: bool = False) -> str:
+    """Run flyctl as ENV's deploy token, and only that one."""
+    environ = {k: v for k, v in os.environ.items() if k not in {"FLY_API_TOKEN", "FLY_ACCESS_TOKEN"}}
+    for other in ENVIRONMENTS.values():
+        environ.pop(other["token"], None)
+    if token := os.environ.get(ENVIRONMENTS[env]["token"]):
+        environ["FLY_API_TOKEN"] = token
+    print("+ flyctl " + " ".join(args), file=sys.stderr)
+    result = subprocess.run(
+        ["flyctl", *args], env=environ, cwd=ROOT, text=True, check=True,
+        stdout=subprocess.PIPE if capture else None,
+    )
+    return result.stdout or ""
+
+
+def _field(release: dict[str, Any], name: str) -> Any:
+    """A release's field, whatever case flyctl's JSON gives its key."""
+    for key, value in release.items():
+        if key.replace("_", "").lower() == name.lower():
+            return value
+    return None
+
+
+def _same_image(a: str, b: str) -> bool:
+    """Whether two image references name the same image: the alert's comes
+    from FLY_IMAGE_REF, which may carry a digest the release history doesn't."""
+    (a_name, _, a_digest), (b_name, _, b_digest) = a.partition("@"), b.partition("@")
+    if a_digest and b_digest:
+        return a_digest == b_digest
+    return a_name == b_name
+
+
+def rollback(env: str, bad: str) -> None:
+    app = ENVIRONMENTS[env]["app"]
+    releases = json.loads(flyctl(env, "releases", "-a", app, "--image", "--json", capture=True))
+    ok = [
+        r for r in releases
+        if _field(r, "imageref") and str(_field(r, "status") or "").lower() != "failed"
+    ]
+    ok.sort(key=lambda r: int(_field(r, "version") or 0), reverse=True)
+    if not ok:
+        raise Refused(f"{app} has no release to read: nothing rolled back")
+    current = _field(ok[0], "imageref")
+    if not _same_image(current, bad):
+        raise Refused(
+            f"{app} runs {current} now, not the alert's {bad}: nothing rolled back"
+        )
+    previous = next((_field(r, "imageref") for r in ok if not _same_image(_field(r, "imageref"), current)), None)
+    if previous is None:
+        raise Refused(f"{app} has run no other image: nothing rolled back")
+    flyctl(env, "deploy", "--config", ENVIRONMENTS[env]["config"], "--image", previous)
+    print(f"Rolled {app} back from {current} to {previous}.")
+
+
+def known_flags() -> set[str]:
+    """The feature flags the app reads: the FLAGS in its settings."""
+    settings = (ROOT / "src" / "dots_and_dashes" / "settings.py").read_text()
+    (flags,) = re.findall(r"^FLAGS = \{(.*?)\}", settings, flags=re.MULTILINE | re.DOTALL)
+    return set(re.findall(r'"(FLAG_[A-Z0-9_]+)"\s*:', flags))
+
+
+def flag_off(env: str, flag: str) -> None:
+    if flag not in known_flags():
+        raise Refused(f"{flag} is not a feature flag the app reads ({', '.join(sorted(known_flags()))})")
+    app = ENVIRONMENTS[env]["app"]
+    flyctl(env, "secrets", "set", "-a", app, f"{flag}=off")
+    print(f"Turned {flag} off on {app}; setting the secret restarted its Machines.")
+
+
+def raise_pool(env: str, size: str, above: str) -> None:
+    if not (size.isdigit() and above.isdigit()):
+        raise Refused(f"the pool size and --above must be whole numbers, not {size!r} and {above!r}")
+    if int(size) <= int(above):
+        raise Refused(f"DB_POOL_SIZE={size} doesn't raise the pool above {above}")
+    if int(size) > MAX_POOL_SIZE:
+        raise Refused(f"DB_POOL_SIZE={size} is over {MAX_POOL_SIZE}, too close to Postgres's 100 connections")
+    app = ENVIRONMENTS[env]["app"]
+    # Setting a secret makes a new release: Fly redeploys every Machine with it.
+    flyctl(env, "secrets", "set", "-a", app, f"DB_POOL_SIZE={size}")
+    print(f"Raised DB_POOL_SIZE on {app} to {size} (above {above}) and redeployed it.")
+
+
+def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(prog="scripts/on-call/remedy", description=__doc__.split("\n")[0])
+    remedies = parser.add_subparsers(dest="remedy", required=True)
+    for name in ["rollback", "flag-off", "raise-pool"]:
+        sub = remedies.add_parser(name)
+        sub.add_argument("env", choices=sorted(ENVIRONMENTS))
+        if name == "rollback":
+            sub.add_argument("--from", dest="bad", required=True, help="the image the alert names")
+        elif name == "flag-off":
+            sub.add_argument("flag")
+        else:
+            sub.add_argument("size")
+            sub.add_argument("--above", required=True, help="db.client.connection.max on the long checkout")
+    args = parser.parse_args(argv)
+    try:
+        if args.remedy == "rollback":
+            rollback(args.env, args.bad)
+        elif args.remedy == "flag-off":
+            flag_off(args.env, args.flag)
+        else:
+            raise_pool(args.env, args.size, args.above)
+    except Refused as refused:
+        print(f"Refused: {refused}", file=sys.stderr)
+        return 2
+    except subprocess.CalledProcessError as failed:
+        print(f"flyctl failed ({failed.returncode}): see its output above", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

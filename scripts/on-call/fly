@@ -1,0 +1,40 @@
+#!/usr/bin/env python3
+"""The Fly commands the On-call agent reads, and nothing else:
+
+    scripts/on-call/fly releases <dev|prod>   the release history, with each image
+    scripts/on-call/fly status   <dev|prod>   the Machines and the image they run
+    scripts/on-call/fly secrets  <dev|prod>   the secrets set (names and digests, never values)
+    scripts/on-call/fly logs     <dev|prod>   recent logs, without following them
+
+Each runs flyctl with that environment's own deploy token, from
+FLY_DEV_API_TOKEN or FLY_PROD_API_TOKEN (without one, flyctl's own login).
+"""
+
+import os
+import subprocess
+import sys
+
+APPS = {"dev": "dots-and-dashes-dev", "prod": "dots-and-dashes"}
+TOKENS = {"dev": "FLY_DEV_API_TOKEN", "prod": "FLY_PROD_API_TOKEN"}
+COMMANDS = {
+    "releases": lambda app: ["releases", "-a", app, "--image"],
+    "status": lambda app: ["status", "-a", app],
+    "secrets": lambda app: ["secrets", "list", "-a", app],
+    "logs": lambda app: ["logs", "-a", app, "--no-tail"],
+}
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) != 2 or argv[0] not in COMMANDS or argv[1] not in APPS:
+        print(__doc__, file=sys.stderr)
+        return 2
+    command, env = argv
+    hidden = {"FLY_API_TOKEN", "FLY_ACCESS_TOKEN", *TOKENS.values()}
+    environ = {k: v for k, v in os.environ.items() if k not in hidden}
+    if token := os.environ.get(TOKENS[env]):
+        environ["FLY_API_TOKEN"] = token
+    return subprocess.run(["flyctl", *COMMANDS[command](APPS[env])], env=environ).returncode
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

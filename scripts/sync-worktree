@@ -201,10 +201,12 @@ else
     git reset -q --mixed "$(git commit-tree "$tree" -p HEAD -p "$target" -m "$message")"
 fi
 skip_claude
-git diff -z --name-only --no-renames --diff-filter=d "$before" "$tree" -- . ':!.claude' \
-    | xargs -0 -r git --literal-pathspecs checkout --
+# Deletions first: a file the merge deletes may stand where it writes a
+# directory (a file/directory conflict moves the file to <name>~HEAD).
 git diff -z --name-only --no-renames --diff-filter=D "$before" "$tree" -- . ':!.claude' \
     | xargs -0 -r rm -f --
+git diff -z --name-only --no-renames --diff-filter=d "$before" "$tree" -- . ':!.claude' \
+    | xargs -0 -r git --literal-pathspecs checkout --
 
 if (( ${#conflicted[@]} )); then
     # Only now may --continue commit what's in the worktree.

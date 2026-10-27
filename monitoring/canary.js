@@ -59,17 +59,19 @@ export default async function () {
   }
   const entry = saved.json();
 
+  let readBack = `read back threw before answering`;
   try {
     const log = http.get(
       `${BASE_URL}/api/daily-logs/${entry.day}`,
       named('GET /api/daily-logs/{day}'),
     );
-    check(log, {
+    const found = check(log, {
       'read back answers 200': (r) => r.status === 200,
       'read back finds the Entry': (r) =>
         r.status === 200 &&
         r.json('entries').some((e) => e.id === entry.id && e.text === TEXT),
     });
+    readBack = found ? '' : `read back answered ${log.status} without the Entry`;
   } finally {
     // Deleted even when the read back fails, so the Canary User's Daily Log
     // never fills up.
@@ -78,6 +80,12 @@ export default async function () {
       null,
       named('DELETE /api/entries/{id}'),
     );
-    check(deleted, { 'delete answers 204': (r) => r.status === 204 });
+    const gone = check(deleted, { 'delete answers 204': (r) => r.status === 204 });
+    // fail() as well as the checks: the run fails whether or not the runner
+    // honours the checks threshold.
+    const failures = [readBack, gone ? '' : `delete answered ${deleted.status}`].filter(Boolean);
+    if (failures.length) {
+      fail(failures.join('; '));
+    }
   }
 }

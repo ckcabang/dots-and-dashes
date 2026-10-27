@@ -4,42 +4,108 @@
 # fail with "would be overwritten" when the other side changed .claude/.
 #
 # Usage: scripts/sync-worktree <branch> [message]
+#        scripts/sync-worktree --continue
 #
 # When the branch changed nothing under .claude/, this is a plain merge.
 # Otherwise it builds the merge commit without writing the masked files, then
-# hides them from `git status` with skip-worktree. A conflict stops it either
-# way: the plain merge leaves the usual conflict markers to resolve; the other
-# path changes nothing and lists the conflicting files, to merge by hand.
+# hides them from `git status` with skip-worktree. A conflict outside .claude/
+# writes the merged files into the worktree, the conflicted ones with their
+# markers, lists them and stops: resolve them, then run it with --continue to
+# commit the merge. A conflict inside .claude/ changes nothing.
 set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
 
-branch=${1:?usage: scripts/sync-worktree <branch> [message]}
+state=$(git rev-parse --git-path sync-worktree-merge)
+
+skip_claude() { git ls-files -z .claude | xargs -0 -r git update-index --skip-worktree; }
+
+# Check the working tree matches commit $1 outside .claude/, then say so.
+report_merged() {
+    git diff --quiet "$1" -- . ':!.claude' || {
+        echo "sync-worktree: the working tree doesn't match $1 outside .claude/" >&2
+        exit 1
+    }
+    echo "Merged $2 as $(git rev-parse --short HEAD); .claude/ files are skip-worktree here."
+}
+
+if [[ ${1:-} == --continue ]]; then
+    [[ -f $state ]] || { echo "sync-worktree: no merge is pending here." >&2; exit 1; }
+    { read -r target; read -r head; read -r branch; read -r message; mapfile -t files; } < "$state"
+    [[ $(git rev-parse HEAD) == "$head" ]] || {
+        echo "sync-worktree: HEAD moved since the merge started; expected $head." >&2
+        exit 1
+    }
+    if git grep --no-index -nE '^(<<<<<<<|>>>>>>>)( |$)' -- "${files[@]}" >&2; then
+        echo "sync-worktree: conflict markers remain; resolve them, then re-run --continue." >&2
+        exit 1
+    fi
+    git add -A -- "${files[@]}"
+    commit=$(git commit-tree "$(git write-tree)" -p HEAD -p "$target" -m "$message")
+    git reset -q --mixed "$commit"
+    skip_claude
+    rm -f "$state"
+    report_merged "$commit" "$branch"
+    exit 0
+fi
+
+branch=${1:?usage: scripts/sync-worktree <branch> [message] | --continue}
 message=${2:-"Merge branch '$branch' into $(git branch --show-current)"}
+
+[[ ! -f $state ]] || {
+    echo "sync-worktree: a merge is pending; resolve it, then run it with --continue." >&2
+    exit 1
+}
 
 if git diff --quiet HEAD..."$branch" -- .claude; then
     exec git merge --no-ff --no-edit -m "$message" "$branch"
 fi
 
-if ! tree=$(git merge-tree --write-tree --name-only HEAD "$branch"); then
-    echo "sync-worktree: merging $branch conflicts; resolve it by hand:" >&2
-    printf '%s\n' "$tree" | tail -n +2 >&2
-    exit 1
-fi
-
-before=$(git rev-parse HEAD)
-commit=$(git commit-tree "$tree" -p HEAD -p "$branch" -m "$message")
-git reset -q --mixed "$commit"
-
-# Bring the working tree up to the merge, outside the masked .claude/ files.
-git diff --name-only --diff-filter=d "$before" "$commit" -- . ':!.claude' \
-    | xargs -r git checkout "$commit" --
-git diff --name-only --diff-filter=D "$before" "$commit" -- . ':!.claude' \
-    | xargs -r rm -f --
-
-# The masked files can't take the new contents, so tell git not to look at them.
-git ls-files -z .claude | xargs -0 -r git update-index --skip-worktree
-
-git diff --quiet "$commit" -- . ':!.claude' || {
-    echo "sync-worktree: the working tree doesn't match $commit outside .claude/" >&2
+git diff --quiet HEAD -- . ':!.claude' && git diff --cached --quiet || {
+    echo "sync-worktree: commit or set aside your changes first." >&2
     exit 1
 }
-echo "Merged $branch as $(git rev-parse --short HEAD); .claude/ files are skip-worktree here."
+
+before=$(git rev-parse HEAD)
+target=$(git rev-parse "$branch^{commit}")
+conflicted=()
+if ! out=$(git merge-tree --write-tree --name-only HEAD "$target"); then
+    # The first line is the merged tree, conflicted files keeping their markers;
+    # the conflicted paths follow, up to a blank line.
+    mapfile -t lines <<< "$out"
+    tree=${lines[0]}
+    for line in "${lines[@]:1}"; do
+        [[ -n $line ]] || break
+        conflicted+=("$line")
+    done
+    claude=$(printf '%s\n' "${conflicted[@]}" | grep '^\.claude/' || true)
+    if [[ -n $claude ]]; then
+        echo "sync-worktree: merging $branch conflicts inside .claude/, which is masked" >&2
+        echo "here; merge it in the main checkout instead. Nothing changed. Conflicts:" >&2
+        printf '%s\n' "${conflicted[@]}" >&2
+        exit 1
+    fi
+else
+    tree=$out
+fi
+
+# Bring the index and the working tree up to the merged tree, outside the masked
+# .claude/ files, which skip-worktree hides from git since they can't be written.
+if (( ${#conflicted[@]} )); then
+    git read-tree "$tree"
+else
+    git reset -q --mixed "$(git commit-tree "$tree" -p HEAD -p "$target" -m "$message")"
+fi
+skip_claude
+git diff --name-only --diff-filter=d "$before" "$tree" -- . ':!.claude' \
+    | xargs -r git checkout --
+git diff --name-only --diff-filter=D "$before" "$tree" -- . ':!.claude' \
+    | xargs -r rm -f --
+
+if (( ${#conflicted[@]} )); then
+    printf '%s\n' "$target" "$before" "$branch" "$message" "${conflicted[@]}" > "$state"
+    echo "sync-worktree: merging $branch conflicts. Resolve these files, then run" >&2
+    echo "scripts/sync-worktree --continue:" >&2
+    printf '  %s\n' "${conflicted[@]}" >&2
+    exit 1
+fi
+report_merged "$(git rev-parse HEAD)" "$branch"

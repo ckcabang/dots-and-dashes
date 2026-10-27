@@ -487,12 +487,14 @@ def test_continue_reads_a_merge_the_old_format_recorded(
     wt.assert_merged()
 
 
-def test_continue_refuses_when_a_conflicted_file_is_gone(
+def test_continue_refuses_an_old_format_path_that_is_gone(
     tmp_path: Path, git_env: dict[str, str]
 ) -> None:
-    # Its markers can't be checked, so --continue can't tell it was resolved.
+    # The old format C-quoted unusual names, so a path missing from the
+    # worktree may be one that's there under its real name, markers and all.
     wt = conflicted(tmp_path, git_env)
     wt.sync("main")
+    (wt.state() / "conflicted").write_text("app.py\n")
     (wt.path / "app.py").unlink()
 
     refused = wt.sync("--continue")
@@ -501,3 +503,47 @@ def test_continue_refuses_when_a_conflicted_file_is_gone(
     assert "  app.py" in refused.stderr.splitlines()
     assert wt.head() == wt.before
     assert wt.pending()
+
+
+def test_continue_commits_a_conflicted_file_deleted_while_resolving(
+    tmp_path: Path, git_env: dict[str, str]
+) -> None:
+    wt = conflicted(
+        tmp_path,
+        git_env,
+        main={"notes.md": "notes, main\n"},
+        feature={"notes.md": "notes, feature\n"},
+    )
+    wt.sync("main")
+    write(wt.path, RESOLVED | {"notes.md": None})
+
+    result = wt.sync("--continue")
+
+    assert result.returncode == 0, result.stderr
+    assert "notes.md" not in wt.tracked()
+    wt.assert_merged()
+
+
+def test_continue_finishes_a_rename_rename_conflict(
+    tmp_path: Path, git_env: dict[str, str]
+) -> None:
+    # merge-tree lists the source, f.txt, as conflicted, though neither side has it.
+    content = "one\ntwo\nthree\n"
+    wt = conflicted(
+        tmp_path,
+        git_env,
+        base={"f.txt": content},
+        main={"f.txt": None, "a.txt": content},
+        feature={"f.txt": None, "b.txt": content},
+    )
+    started = wt.sync("main")
+    assert "  f.txt" in started.stderr.splitlines()
+    write(wt.path, RESOLVED | {"b.txt": None})
+
+    result = wt.sync("--continue")
+
+    assert result.returncode == 0, result.stderr
+    assert "a.txt" in wt.tracked()
+    assert "b.txt" not in wt.tracked()
+    assert "f.txt" not in wt.tracked()
+    wt.assert_merged()

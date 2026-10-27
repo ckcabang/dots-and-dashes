@@ -69,25 +69,32 @@ if [[ ${1:-} == --continue ]]; then
         echo "sync-worktree: the merge stopped before writing its files; run --abort, then start it again." >&2
         exit 1
     }
-    # Before NUL-separated paths, the script wrote one per line, and the merge
-    # may have been started by it.
+    # A conflicted path that's gone can't hold markers: it was deleted while
+    # resolving, or it's a rename's source, and `git add -u` records that. But
+    # before NUL-separated paths the script wrote one per line, C-quoting
+    # unusual names, so in a merge it started a missing path may be a file
+    # that's there under its real name, markers and all.
+    legacy=0
     if [[ $(tail -c1 "$state/conflicted" | od -An -tx1 | tr -d ' ') == 0a ]]; then
-        mapfile -t files < "$state/conflicted"
+        legacy=1
+        mapfile -t recorded < "$state/conflicted"
     else
-        mapfile -d '' -t files < "$state/conflicted"
+        mapfile -d '' -t recorded < "$state/conflicted"
     fi
-    # git grep skips a path that isn't there, so a missing one would pass.
-    missing=()
-    for file in "${files[@]}"; do
-        [[ -e $file ]] || missing+=("$file")
+    files=() missing=()
+    for file in "${recorded[@]}"; do
+        if [[ -e $file ]]; then files+=("$file"); else missing+=("$file"); fi
     done
-    if (( ${#missing[@]} )); then
-        echo "sync-worktree: these conflicted files are gone, so their markers can't be" >&2
-        echo "checked; put them back resolved, or back out with --abort:" >&2
+    if (( legacy && ${#missing[@]} )); then
+        echo "sync-worktree: an older sync-worktree started this merge, and these conflicted" >&2
+        echo "files it recorded are gone, so their markers can't be checked. Back out with" >&2
+        echo "--abort, then start the merge again:" >&2
         printf '  %s\n' "${missing[@]}" >&2
         exit 1
     fi
-    if git --literal-pathspecs grep --no-index -nE '^(<<<<<<<|>>>>>>>)( |$)' -- "${files[@]}" >&2; then
+    # With no paths, git grep would search the whole worktree.
+    if (( ${#files[@]} )) &&
+        git --literal-pathspecs grep --no-index -nE '^(<<<<<<<|>>>>>>>)( |$)' -- "${files[@]}" >&2; then
         echo "sync-worktree: conflict markers remain; resolve them, then re-run --continue." >&2
         exit 1
     fi

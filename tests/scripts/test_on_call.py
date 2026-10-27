@@ -766,8 +766,8 @@ ALLOWED_TOOLS = [
 
 # Read rules apply to Grep and Glob too, and a deny beats any allow. These keep
 # the agent off the process environment (/proc/<pid>/environ holds the tokens)
-# and the system and temp dirs outside the checkout, the runner's own temp dir
-# (the prompt, the transcript) included. Not ~/**: the checkout is under it.
+# and the system and temp dirs outside the checkout. Not ~/**: the checkout is
+# under it.
 DENIED_TOOLS = [
     "Read(//proc/**)",
     "Read(//sys/**)",
@@ -775,22 +775,71 @@ DENIED_TOOLS = [
     "Read(//etc/**)",
     "Read(//tmp/**)",
     "Read(//root/**)",
-    "Read(//home/runner/work/_temp/**)",
 ]
+
+# A fake claude on PATH: records its arguments.
+FAKE_CLAUDE = """#!/usr/bin/env python3
+import json, os, sys
+with open(os.environ["FAKE_LOG"], "w") as log:
+    json.dump(sys.argv[1:], log)
+"""
 
 
 def allowed_tools() -> list[str]:
     return on_call_step(AGENT_STEP)["env"]["ON_CALL_TOOLS"].strip().splitlines()
 
 
-def test_the_agent_may_read_telemetry_apply_a_remedy_and_file_an_issue_and_nothing_else():
+def run_agent_step(tmp_path: Path, runner_temp: Path) -> list[str]:
+    """Run the agent step's script as the runner does, against a fake claude,
+    and return the arguments claude got."""
+    step = on_call_step(AGENT_STEP)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    claude = bin_dir / "claude"
+    claude.write_text(FAKE_CLAUDE.replace("python3", sys.executable.replace("\\", "/"), 1))
+    claude.chmod(claude.stat().st_mode | stat.S_IEXEC)
+    (runner_temp / "on-call").mkdir(parents=True)
+    (runner_temp / "on-call" / "prompt.md").write_text("prompt\n")
+    log = tmp_path / "claude.json"
+    env = {k: v for k, v in step["env"].items() if "${{" not in v}
+    env |= {
+        "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+        "FAKE_LOG": str(log),
+        "RUNNER_TEMP": str(runner_temp),
+        "ON_CALL_TOKENS": str(runner_temp / "on-call-tokens"),
+        "GRAFANA_URL": "https://grafana.invalid",
+    }
+    # GitHub runs a `shell: bash` step as `bash --noprofile --norc -eo pipefail`.
+    subprocess.run(
+        ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", step["run"]],
+        env=env,
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+    )
+    return json.loads(log.read_text())
+
+
+def option(args: list[str], name: str) -> list[str]:
+    """A comma-separated option's entries, as claude splits them."""
+    return [entry for entry in args[args.index(name) + 1].split(",") if entry]
+
+
+def test_the_agent_may_read_telemetry_apply_a_remedy_and_file_an_issue_and_nothing_else(
+    tmp_path,
+):
     step = on_call_step(AGENT_STEP)
     run = step["run"]
+    runner_temp = tmp_path / "runner" / "_temp"
+
+    args = run_agent_step(tmp_path, runner_temp)
 
     assert allowed_tools() == ALLOWED_TOOLS
-    assert step["env"]["ON_CALL_DENIED"].strip().splitlines() == DENIED_TOOLS
-    assert '--allowedTools "$(paste -sd, <<<"$ON_CALL_TOOLS")"' in run
-    assert '--disallowedTools "$(paste -sd, <<<"$ON_CALL_DENIED")"' in run
+    assert option(args, "--allowedTools") == ALLOWED_TOOLS
+    # The runner's own temp dir (the token files, the prompt, the transcript)
+    # is denied wherever RUNNER_TEMP puts it.
+    assert option(args, "--disallowedTools") == [*DENIED_TOOLS, f"Read(/{runner_temp}/**)"]
+    assert "/home/runner" not in step["env"]["ON_CALL_DENIED"]
     # The built-in tools it has at all: no Write, Edit, WebFetch or subagents.
     assert "--tools Read,Grep,Glob,Bash" in run
     # Anything not allowed above is refused, never asked about.
@@ -837,8 +886,9 @@ def test_no_token_is_in_the_agents_environment():
     assert env["ON_CALL_TOKENS"] == "${{ runner.temp }}/on-call-tokens"
 
 
-def test_an_earlier_step_writes_each_token_to_a_file_only_its_owner_reads():
+def test_an_earlier_step_writes_each_token_to_a_file_only_its_owner_reads(tmp_path):
     step = on_call_step(TOKEN_STEP)
+    runner_temp = tmp_path / "runner" / "_temp"
 
     assert step["env"] == AGENT_TOKENS
     assert step["run"].startswith("umask 077\n")
@@ -846,7 +896,8 @@ def test_an_earlier_step_writes_each_token_to_a_file_only_its_owner_reads():
     for name in AGENT_TOKENS:
         assert name in step["run"]
     # The token files sit in the runner's temp dir, which the file tools are denied.
-    assert "Read(//home/runner/work/_temp/**)" in DENIED_TOOLS
+    denied = option(run_agent_step(tmp_path, runner_temp), "--disallowedTools")
+    assert f"Read(/{runner_temp}/**)" in denied
 
 
 def test_claude_code_reads_its_api_key_through_a_helper_not_the_environment():

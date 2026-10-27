@@ -71,12 +71,42 @@ def test_the_latency_alert_fires_above_a_1s_p95(env):
     assert f'entry_save_duration_seconds_bucket{{job="{env}/dots-and-dashes"' in _query(rule)
 
 
-def test_the_canary_alert_fires_when_the_canary_fails_or_stops_reporting():
+ALERTS = [*SAVE_ALERTS, "canary-failing"]
+
+
+@pytest.mark.parametrize("alert", ALERTS)
+def test_every_alert_has_a_prod_and_a_dev_rule(alert):
+    rules = _rules()
+
+    assert {f"dnd-{alert}-prod", f"dnd-{alert}-dev"} <= set(rules)
+    assert {uid.rsplit("-", 1)[0].removeprefix("dnd-") for uid in rules} == set(ALERTS)
+
+
+def test_the_canary_alert_fires_when_prods_canary_fails_or_stops_reporting():
     rule = _rules()["dnd-canary-failing-prod"]
 
-    assert 'probe_success{job="dots-and-dashes-canary"}' in _query(rule)
+    assert 'probe_success{job="dots-and-dashes-canary-prod"}[5m]' in _query(rule)
     assert _threshold(rule) == ("lt", 0.8)
     assert rule["noDataState"] == "Alerting"
+
+
+def test_the_dev_canary_rule_differs_from_prods_only_in_job_and_window():
+    """Dev's canary runs every 15 minutes, prod's every minute, so dev's window
+    is 35m, always holding two runs or more, where prod's 5m would often hold
+    none. A dev canary that stops reporting resolves rather than firing for
+    good. Their descriptions say so; nothing else differs."""
+    prod, dev = _rules()["dnd-canary-failing-prod"], _rules()["dnd-canary-failing-dev"]
+
+    expected = json.loads(json.dumps(prod).replace("prod", "dev").replace("[5m]", "[35m]"))
+    expected["data"][0]["relativeTimeRange"]["from"] = 35 * 60
+    expected["noDataState"] = "OK"
+    for rule in (expected, dev):
+        rule["annotations"].pop("description")
+    assert dev == expected
+    assert 'probe_success{job="dots-and-dashes-canary-dev"}[35m]' in _query(dev)
+    assert 'entry_saves_total{job="dev/dots-and-dashes"}[35m]' in _query(dev)
+    description = _rules()["dnd-canary-failing-dev"]["annotations"]["description"]
+    assert "every 15 minutes" in description and "35 minutes" in description
 
 
 def _runbook_anchors() -> set[str]:
@@ -116,14 +146,16 @@ def test_a_save_alert_names_the_image_whose_saves_it_fired_on(alert):
     assert "var-image={{ $labels.image | urlquery }}" in rule["annotations"]["dashboard_url"]
 
 
-def test_the_canary_alert_names_the_image_prod_is_serving():
+@pytest.mark.parametrize(("env", "window"), [("prod", "5m"), ("dev", "35m")])
+def test_the_canary_alert_names_the_image_its_environment_is_serving(env, window):
     """The probe can't know the image, so the rule joins it with the images
-    prod's save metrics carry, and still fires with none (the app down)."""
-    rule = _rules()["dnd-canary-failing-prod"]
-    probe = 'min(avg_over_time(probe_success{job="dots-and-dashes-canary"}[5m]))'
+    the app's save metrics carry, and still fires with none (the app down)."""
+    rule = _rules()[f"dnd-canary-failing-{env}"]
+    probe = f'min(avg_over_time(probe_success{{job="dots-and-dashes-canary-{env}"}}[{window}]))'
 
     assert _query(rule) == (
-        'group by (image) (last_over_time(entry_saves_total{job="prod/dots-and-dashes"}[5m]))'
+        "group by (image) "
+        f'(last_over_time(entry_saves_total{{job="{env}/dots-and-dashes"}}[{window}]))'
         f" * 0 + on() group_left() {probe} or on() {probe}"
     )
     assert "{{ $labels.image | urlquery }}" in rule["annotations"]["dashboard_url"]
@@ -164,4 +196,14 @@ def test_the_dashboard_shows_saves_by_outcome_p95_with_exemplars_and_canary_pass
     assert p95["expr"].startswith("histogram_quantile(0.95,")
     assert p95["exemplar"] is True
     (canary,) = _panel("Canary pass rate")["targets"]
-    assert 'probe_success{job="dots-and-dashes-canary"}' in canary["expr"]
+    assert 'probe_success{job="dots-and-dashes-canary-$env"}' in canary["expr"]
+
+
+CANARY = MONITORING / "canary.js"
+
+
+def test_the_canary_script_has_the_one_line_the_dev_check_changes():
+    """scripts/provision-canary makes the dev check's script by changing this
+    line's 'prod' to 'dev': it must be there exactly once."""
+    assert CANARY.read_text().count("const ENVIRONMENT = __ENV.CANARY_ENV || 'prod';") == 1
+    assert "secret: 'canary-password-dev'" in CANARY.read_text()

@@ -4,7 +4,7 @@ Three alerts guard the key journey (log an Entry on today's Daily Log). Their ru
 
 - **Save failures**: Entry save failure rate above 5% over 10 minutes.
 - **Save latency**: p95 Entry save latency above 1s, over 10 minutes.
-- **Canary failing**: the canary passed under 80% of its runs over 5 minutes, or stopped reporting.
+- **Canary failing**: the canary passed under 80% of its runs: over 5 minutes on prod (it runs every minute), or 35 minutes on dev (every 15 minutes). On prod, a canary that stops reporting fires too.
 
 The two save alerts read the save metrics, as Grafana Cloud's Prometheus names them. Every series carries `job="<environment>/dots-and-dashes"`, because the app sets `service.namespace` to its `DEPLOYMENT_ENVIRONMENT`, and `image`, the deployed image (`FLY_IMAGE_REF`). Each save alert has a prod rule and a dev rule that differ only in that `job` selector, so an incident staged on dev fires the dev rule and never prod's. They are counted by image, so a notification names the image whose saves fail. Refused saves, such as blank text, are the User's doing and count as neither success nor failure:
 
@@ -33,8 +33,8 @@ Every notification carries the environment, the image, a link to the dashboard f
 
 ## Alert: Canary failing
 
-- **Means**: the Synthetic Monitoring check `dots-and-dashes-canary` (the script is `monitoring/canary.js`) failed at least 2 of its last 5 runs, or stopped reporting. It logs in as the Canary User and expects 303, saves an Entry (201), reads it back (200) and deletes it (204). A lost login answers 401, which the save metrics count as refused, so this is the only alert that sees it.
-- **First look**: the check's logs in Synthetic Monitoring name the step and status that failed. A failed save also shows on the save alerts; a 401 on the save, or a log in that isn't 303, means the Canary User's login broke: its password must match the `canary-password` Synthetic Monitoring secret (`scripts/provision-canary`). The probe can't know the image, so the rule joins its pass rate with the images prod's save metrics carried over the same 5 minutes: one notification per image serving prod, or one naming no image when prod saved nothing (the app down).
+- **Means**: a Synthetic Monitoring check running `monitoring/canary.js` passed under 80% of its runs in the window. On prod that is 2 or more failures in the last 5 runs; on dev, any failure among its 2 or 3. The checks are `dots-and-dashes-canary-prod`, which runs every minute and is read over 5 minutes, and `dots-and-dashes-canary-dev`, which runs every 15 minutes and is read over 35 minutes, so that window always holds two runs or more. On prod, a check that stops reporting fires too. On dev, no data resolves, so a paused dev check doesn't fire for good. Otherwise the two rules differ only in their `job`. The check logs in as its environment's Canary User and expects 303, saves an Entry (201), reads it back (200) and deletes it (204). A lost login answers 401, which the save metrics count as refused, so this is the only alert that sees it.
+- **First look**: the check's logs in Synthetic Monitoring name the step and status that failed. A failed save also shows on the save alerts. A 401 on the save, or a log in that isn't 303, means the Canary User's login broke: its password must match its Synthetic Monitoring secret, `canary-password` on prod or `canary-password-dev` on dev (`scripts/provision-canary`). On dev, a run that times out may just be a cold start, since dev stops when idle. The check's timeout is 120s to cover one. The probe can't know the image, so the rule joins its pass rate with the images the app's save metrics carried over the same window. That gives one notification per image serving the environment, or one naming no image when the app saved nothing (the app is down).
 
 The On-call agent (`.claude/agents/on-call.md`) applies only the three remedies below (ADR-0002). Anything else goes to the human through an incident issue labelled `ready-for-human`.
 
@@ -44,11 +44,10 @@ Stage each scenario on dev with the chaos switch or the flag and pool settings b
 
 Set these as Fly secrets on dev (`fly secrets set -a dots-and-dashes-dev NAME=value`, which restarts the app) and unset them to end the incident. Unset, the app behaves exactly as without them.
 
-The canary runs on prod only, so dev's save alerts need saves to fire on. Drive some with the canary script as dev's Canary User (`scripts/provision-canary` can create one), from a file holding `canary-password=<its password>`:
+Dev's canary saves only once every 15 minutes, too rarely to fire dev's save alerts in good time. Drive more saves with the canary script as dev's Canary User (`scripts/provision-canary` creates it), from a file holding `canary-password-dev=<its password>`:
 
 ```sh
-k6 run -i 50 --secret-source=file=canary.secrets \
-  -e BASE_URL=https://dots-and-dashes-dev.fly.dev monitoring/canary.js
+k6 run -i 50 --secret-source=file=canary.secrets -e CANARY_ENV=dev monitoring/canary.js
 ```
 
 The 10-minute windows keep the saves counted for 10 minutes after the run.

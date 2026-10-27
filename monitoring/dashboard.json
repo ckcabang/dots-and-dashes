@@ -265,7 +265,7 @@
       "id": 4,
       "type": "timeseries",
       "title": "Canary pass rate",
-      "description": "Share of Synthetic Monitoring canary runs that passed. The canary runs on prod only, so the Environment and Image filters don't apply. The Canary failing alert fires below 80% over 5 minutes.",
+      "description": "Share of the selected environment's Synthetic Monitoring canary runs that passed: every minute on prod, every 15 minutes on dev (so dev's line joins sparse points). The Image filter doesn't apply: a probe can't know the image. The Canary failing alert fires below 80%, over 5 minutes on prod and 35 minutes on dev.",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
@@ -297,7 +297,9 @@
           "custom": {
             "thresholdsStyle": {
               "mode": "line"
-            }
+            },
+            "spanNulls": true,
+            "showPoints": "always"
           }
         },
         "overrides": []
@@ -318,7 +320,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "avg(avg_over_time(probe_success{job=\"dots-and-dashes-canary\"}[$__rate_interval]))",
+          "expr": "avg(avg_over_time(probe_success{job=\"dots-and-dashes-canary-$env\"}[$__rate_interval]))",
           "legendFormat": "pass rate",
           "range": true,
           "editorMode": "code",

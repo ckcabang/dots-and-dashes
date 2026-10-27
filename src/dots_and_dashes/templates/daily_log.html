@@ -7,13 +7,10 @@
       {%- if day == today %}Today{% elif next_day == today %}Yesterday{% elif previous_day == today %}Tomorrow{% endif -%}
     </p>
     <h1><time datetime="{{ day.isoformat() }}">{{ day.strftime("%A, %-d %B %Y") }}</time></h1>
-    {%- set tasks = entries | selectattr("type", "equalto", "task") | list -%}
-    {%- set done = tasks | selectattr("state", "equalto", "completed") | list | length -%}
-    {%- set counted = done + (tasks | selectattr("state", "equalto", "open") | list | length) %}
-    {# Tasks done today, out of the day's Open and Completed Tasks; journal-ui.js keeps it current. #}
-    <p id="day-progress" class="progress{% if counted and done == counted %} progress--done{% endif %}"{% if not counted %} hidden{% endif %}>
-      <span class="progress-bar" aria-hidden="true"><span style="width: {{ (100 * done / counted) | round | int if counted else 0 }}%"></span></span>
-      <span class="progress-label">{% if counted and done == counted %}All tasks done{% else %}{{ done }} of {{ counted }} done{% endif %}</span>
+    {# The Journal's day_progress; journal-ui.js redraws it when the list changes. #}
+    <p id="day-progress" class="progress{% if progress.all_completed %} progress--completed{% endif %}"{% if not progress.total %} hidden{% endif %}>
+      <span class="progress-bar" aria-hidden="true"><span style="width: {{ (100 * progress.completed / progress.total) | round | int if progress.total else 0 }}%"></span></span>
+      <span class="progress-label">{% if progress.all_completed %}All Tasks completed{% else %}{{ progress.completed }} of {{ progress.total }} Tasks completed{% endif %}</span>
     </p>
   </div>
   <nav class="day-nav" aria-label="Days">
@@ -31,7 +28,7 @@
       hx-on::after-request="if (event.detail.successful) this.reset()">
   <input type="hidden" name="day" value="{{ day.isoformat() }}">
   <input name="text" aria-label="New entry" autocomplete="off" autofocus required pattern=".*\S.*"
-         placeholder="Add a task">
+         placeholder="Add a task" aria-describedby="entry-syntax">
 </form>
 <p class="syntax" id="entry-syntax">Start with <code>o</code> for an Event, <code>-</code> for a Note, <code>*</code> for Priority; add a time like <code>14:00</code>.</p>
 

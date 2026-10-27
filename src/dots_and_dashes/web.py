@@ -690,6 +690,7 @@ def create_app(
         return JSONResponse({"detail": str(exc)}, status_code=404)
 
     def render_daily_log(request: Request, session: Session, day: date, today: date) -> Response:
+        entries = persistence.entries_on(session, day)
         return templates.TemplateResponse(
             request,
             "daily_log.html",
@@ -698,7 +699,8 @@ def create_app(
                 "day": day,
                 "previous_day": day - timedelta(days=1),
                 "next_day": day + timedelta(days=1),
-                "entries": persistence.entries_on(session, day),
+                "entries": entries,
+                "progress": journal.day_progress(entries),
                 "inbox_count": persistence.inbox_count(session),
             },
         )

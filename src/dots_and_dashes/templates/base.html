@@ -23,7 +23,7 @@
       <a href="/months"{{ current(path.startswith("/months") or path.startswith("/monthly-review")) }}>Month</a>
       <a href="/future"{{ current(path.startswith("/future")) }}>Future</a>
       <a href="/migration"{{ current(path.startswith("/migration")) }}>Migration</a>
-      <a href="/inbox"{{ current(path.startswith("/inbox")) }}
+      <a href="/inbox"{{ current(path.startswith("/inbox") or path.startswith("/capture")) }}
          {%- if inbox_count is defined %} id="inbox" aria-keyshortcuts="i" aria-label="Inbox ({{ inbox_count }})"{% endif %}>Inbox
         {%- if inbox_count %}<span class="badge">{{ inbox_count }}</span>{% endif %}</a>
     </nav>

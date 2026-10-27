@@ -1,69 +1,25 @@
-// Feedback that keeps the page in step with what the User is doing. Nothing
-// here changes an Entry: keyboard.js and the server own that.
-//
-// - The quick-entry box shows the Entry type its Prefix will create, as it is
-//   typed (". " Task, "o " Event, "- " Note; no Prefix is a Task).
-// - On a Daily Log, the progress line counts Completed Tasks against Open and
-//   Completed ones, and the empty hint shows while the day has no Entries.
-//   Both follow every change to the list, however it was made.
+// Keeps a Daily Log's progress line and empty hint in step with its list,
+// however the list changed. Nothing here changes an Entry or decides what
+// counts: the Journal's day_progress does, so the progress line is redrawn
+// from a fresh copy of the page, as keyboard.js redraws a list.
 (() => {
-  // Signifiers, then an optional type, then spaces: journal.py's _PREFIX.
-  const PREFIX = /^[*!]*([.o-]?) +/;
-  const TYPES = { ".": "task", o: "event", "-": "note" };
+  const list = document.getElementById("entries");
+  if (!list || !document.getElementById("day-progress")) return;
+  const emptyHint = document.getElementById("empty-hint");
+  let pending;
 
-  function typeOf(text) {
-    if (!text.trim()) return "";
-    const match = PREFIX.exec(text);
-    return (match && TYPES[match[1]]) || "task";
-  }
+  const update = () => {
+    if (emptyHint) emptyHint.hidden = list.querySelector(":scope > .entry") !== null;
+    // One redraw for a burst of changes, such as a whole list swapped in.
+    clearTimeout(pending);
+    pending = setTimeout(() => {
+      htmx.ajax("GET", location.pathname + location.search, {
+        target: "#day-progress",
+        select: "#day-progress",
+        swap: "outerHTML",
+      });
+    }, 150);
+  };
 
-  function watchQuickEntry(box) {
-    const show = () => {
-      const type = typeOf(box.value);
-      if (type) box.dataset.type = type;
-      else delete box.dataset.type;
-    };
-    box.addEventListener("input", show);
-    box.form?.addEventListener("reset", () => setTimeout(show));
-    show();
-  }
-
-  function trackDailyLog(list) {
-    const progress = document.getElementById("day-progress");
-    const emptyHint = document.getElementById("empty-hint");
-
-    const update = () => {
-      const entries = list.querySelectorAll(":scope > .entry");
-      if (emptyHint) emptyHint.hidden = entries.length > 0;
-      if (!progress) return;
-
-      const tasks = list.querySelectorAll(":scope > .entry--task");
-      let done = 0;
-      let counted = 0;
-      for (const task of tasks) {
-        if (task.dataset.state === "completed") done += 1;
-        if (task.dataset.state === "completed" || task.dataset.state === "open") counted += 1;
-      }
-      progress.hidden = counted === 0;
-      const finished = counted > 0 && done === counted;
-      progress.classList.toggle("progress--done", finished);
-      progress.querySelector(".progress-bar > span").style.width =
-        counted ? `${Math.round((100 * done) / counted)}%` : "0%";
-      progress.querySelector(".progress-label").textContent = finished
-        ? "All tasks done"
-        : `${done} of ${counted} done`;
-    };
-
-    new MutationObserver(update).observe(list, {
-      childList: true,
-      subtree: true,
-      attributes: true,
-      attributeFilter: ["data-state", "class"],
-    });
-    update();
-  }
-
-  for (const box of document.querySelectorAll('input[aria-label="New entry"]')) watchQuickEntry(box);
-  const dailyLog = document.querySelector("#entries");
-  if (dailyLog && document.getElementById("day-progress")) trackDailyLog(dailyLog);
+  new MutationObserver(update).observe(list, { childList: true, subtree: true });
 })();

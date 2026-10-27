@@ -1,3 +1,4 @@
+import re
 from contextlib import contextmanager
 from datetime import date
 
@@ -173,6 +174,36 @@ def test_the_daily_log_page_shows_signifiers_type_and_time(app_client):
     assert "entry--event" in page.text
     assert '<time datetime="14:30">14:30</time>' in page.text
     assert "dentist" in page.text
+
+
+def test_the_daily_log_page_shows_its_progress_through_its_tasks(app_client):
+    with app_client() as client:
+        task = client.post("/api/entries", json={"text": "buy milk"}).json()["id"]
+        client.post("/api/entries", json={"text": "call bank"})
+        client.post(f"/api/entries/{task}/complete")
+        page = client.get("/")
+
+    assert "1 of 2 Tasks completed" in page.text
+
+
+@pytest.mark.parametrize(
+    ("path", "current"),
+    [
+        ("/", "Day"),
+        ("/days/2026-10-24", "Day"),
+        ("/months/2026-10", "Month"),
+        ("/future", "Future"),
+        ("/migration", "Migration"),
+        ("/inbox", "Inbox"),
+        ("/capture", "Inbox"),
+    ],
+)
+def test_the_masthead_marks_the_page_being_viewed(app_client, path, current):
+    with app_client() as client:
+        page = client.get(path)
+
+    marked = re.findall(r'<a href="[^"]*" aria-current="page"[^>]*>(\w+)', page.text)
+    assert marked == [current]
 
 
 def test_only_entries_with_a_task_state_carry_a_state_class(app_client):

@@ -369,6 +369,28 @@ def reopen(entry: Entry) -> Entry:
     )
 
 
+@dataclass(frozen=True)
+class DayProgress:
+    """How far a Daily Log is through its Tasks."""
+
+    completed: int
+    total: int  # Open and Completed Tasks: Migrated and Scheduled ones live on elsewhere
+
+    @property
+    def all_completed(self) -> bool:
+        return self.total > 0 and self.completed == self.total
+
+
+def day_progress(daily_log: list[Entry]) -> DayProgress:
+    """Count a Daily Log's Completed Tasks against its Open and Completed ones.
+
+    Cancelled Tasks were deliberately abandoned, so they count for neither.
+    """
+    states = [entry.state for entry in daily_log if entry.type is EntryType.TASK]
+    completed = states.count(TaskState.COMPLETED)
+    return DayProgress(completed=completed, total=completed + states.count(TaskState.OPEN))
+
+
 def as_typed(entry: Entry | ParsedEntry) -> str:
     """The Entry as it would be typed: the inverse of reading text with log_entry.
 

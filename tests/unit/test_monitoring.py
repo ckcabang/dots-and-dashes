@@ -82,67 +82,113 @@ def test_every_alert_has_a_prod_and_a_dev_rule(alert):
     assert {uid.rsplit("-", 1)[0].removeprefix("dnd-") for uid in rules} == set(ALERTS)
 
 
+def _probe(env: str, window: str) -> str:
+    return f'min(avg_over_time(probe_success{{job="dots-and-dashes-canary-{env}"}}[{window}]))'
+
+
+# Prod's canary reads -1 when its check stops reporting. A Grafana rule on no
+# data copies its last state, annotations included, without re-rendering them
+# (state.Manager.setNextStateForAll), so #92's notification kept "passed 100%".
+# Reading -1 makes no runs a real evaluation, which re-renders the text.
+PROD_PROBE = f"({_probe('prod', '5m')} or on() vector(-1))"
+
+
 def test_the_canary_alert_fires_when_prods_canary_fails_or_stops_reporting():
     rule = _rules()["dnd-canary-failing-prod"]
 
-    assert 'probe_success{job="dots-and-dashes-canary-prod"}[5m]' in _query(rule)
-    assert _threshold(rule) == ("lt", 0.8)
+    assert _query(rule).count(PROD_PROBE) == 2
+    op, threshold = _threshold(rule)
+    assert op == "lt" and threshold == 0.8
+    assert -1 < threshold  # no runs in the window fires, as a failing canary does
+    assert rule["for"] == "1m"
     assert rule["noDataState"] == "Alerting"
 
 
-def test_the_dev_canary_rule_differs_from_prods_only_in_job_and_window():
+def test_a_paused_dev_canary_reads_as_no_data_which_resolves():
+    """Dev's check is paused whenever no incident is staged on dev: no runs
+    must resolve, not read -1 and fire."""
+    rule = _rules()["dnd-canary-failing-dev"]
+
+    assert "vector(" not in _query(rule)
+    assert rule["noDataState"] == "OK"
+
+
+def test_the_dev_canary_rule_differs_from_prods_only_in_job_window_and_no_data():
     """Dev's canary runs every 15 minutes, prod's every minute, so dev's window
     is 35m, always holding two runs or more, where prod's 5m would often hold
-    none. A dev canary that stops reporting resolves rather than firing for
-    good. Their descriptions say so; nothing else differs."""
+    none. Prod reads no runs as -1 and fires; dev's no runs is no data, which
+    resolves. Their summaries and descriptions say so; nothing else differs."""
     prod, dev = _rules()["dnd-canary-failing-prod"], _rules()["dnd-canary-failing-dev"]
 
     expected = json.loads(json.dumps(prod).replace("prod", "dev").replace("[5m]", "[35m]"))
+    dev_probe = _probe("dev", "35m")
+    model = expected["data"][0]["model"]
+    model["expr"] = model["expr"].replace(f"({dev_probe} or on() vector(-1))", dev_probe)
     expected["data"][0]["relativeTimeRange"]["from"] = 35 * 60
     expected["noDataState"] = "OK"
     for rule in (expected, dev):
+        rule["annotations"].pop("summary")
         rule["annotations"].pop("description")
     assert dev == expected
-    assert 'probe_success{job="dots-and-dashes-canary-dev"}[35m]' in _query(dev)
-    assert 'entry_saves_total{job="dev/dots-and-dashes"}[35m]' in _query(dev)
     description = _rules()["dnd-canary-failing-dev"]["annotations"]["description"]
     assert "every 15 minutes" in description and "35 minutes" in description
 
 
-# Grafana's own no-data signal: on no data it "re-uses the latest known set of
-# fields in Values, but will use -1 in place of the measured value"
-# (grafana.com/docs/grafana/latest/alerting/fundamentals/alert-rule-evaluation/
-# nodata-and-error-states/). A pass rate is never below 0, so -1 means no data.
-NO_DATA = "{{ if lt $values.A.Value 0.0 }}"
+def _render(template: str, a: float, image: str = "") -> str:
+    """Grafana's template language, for the few actions the canary annotations
+    use, with $values.A.Value = a. Any other action fails the test."""
+    out: list[str] = []
+    shown = [True]  # one entry per open {{ if }}, and the base: whether text shows
+    for literal, action in re.findall(r"(.*?)(?:\{\{ (.*?) \}\}|$)", template, re.DOTALL):
+        if all(shown):
+            out.append(literal)
+        if not action:
+            continue
+        if action == "if lt $values.A.Value 0.0":
+            shown.append(a < 0.0)
+        elif action == "if $labels.image":
+            shown.append(bool(image))
+        elif action == "else":
+            shown[-1] = not shown[-1]
+        elif action == "end":
+            shown.pop()
+        elif all(shown):
+            rendered = {
+                "humanizePercentage $values.A.Value": f"{a * 100:.4g}%",
+                "$labels.image": image,
+            }
+            out.append(rendered[action])
+    assert shown == [True]
+    return "".join(out)
 
 
-def _no_data_and_data_branches(text: str) -> tuple[str, str]:
-    assert text.count(NO_DATA) == 1
-    no_data, rest = text.split(NO_DATA, 1)[1].split("{{ else }}", 1)
-    return no_data, rest.split("{{ end }}", 1)[0]
-
-
-@pytest.mark.parametrize("env", ["prod", "dev"])
 @pytest.mark.parametrize("annotation", ["summary", "description"])
-def test_the_canary_alert_says_the_canary_stopped_reporting_rather_than_a_pass_rate_on_no_data(
-    env, annotation
-):
-    """Rendering the -1 as a pass rate read "passed 100%" while the rule fired on no data (#92)."""
-    text = _rules()[f"dnd-canary-failing-{env}"]["annotations"][annotation]
+def test_prods_canary_alert_says_it_stopped_reporting_rather_than_a_pass_rate(annotation):
+    """#92 read "passed 100%" while the rule fired because the check had stopped."""
+    text = _rules()["dnd-canary-failing-prod"]["annotations"][annotation]
 
-    no_data, data = _no_data_and_data_branches(text)
-    assert "stopped reporting" in no_data
-    assert "$values" not in no_data and "%" not in no_data
-    assert "stopped reporting" not in data
+    rendered = _render(text, a=-1, image="registry.fly.io/dots-and-dashes:abc")
+    assert "stopped reporting" in rendered
+    assert "passed" not in rendered and "100%" not in rendered
 
 
-@pytest.mark.parametrize("env", ["prod", "dev"])
-def test_the_canary_alert_gives_the_pass_rate_when_the_canary_reports(env):
-    description = _rules()[f"dnd-canary-failing-{env}"]["annotations"]["description"]
+@pytest.mark.parametrize(("env", "window"), [("prod", "5 minutes"), ("dev", "35 minutes")])
+def test_the_canary_alert_gives_the_pass_rate_when_the_canary_reports(env, window):
+    annotations = _rules()[f"dnd-canary-failing-{env}"]["annotations"]
 
-    _, data = _no_data_and_data_branches(description)
-    assert "passed {{ humanizePercentage $values.A.Value }} of its runs" in data
-    assert description.count("humanizePercentage") == 1
+    for a, rate in [(0.4, "40%"), (1.0, "100%")]:
+        description = _render(annotations["description"], a=a)
+        assert f"passed {rate} of its runs on {env} over the last {window}" in description
+        assert "stopped reporting" not in description
+        assert _render(annotations["summary"], a=a) == f"The canary is failing on {env}"
+
+
+def test_devs_canary_alert_never_claims_the_canary_stopped_reporting():
+    """Dev reads no runs as no data, which resolves, so a -1 branch would never render."""
+    annotations = _rules()["dnd-canary-failing-dev"]["annotations"]
+
+    assert "stopped reporting" not in annotations["summary"] + annotations["description"]
+    assert "$values.A.Value 0.0" not in annotations["description"]
 
 
 def _runbook_anchors() -> set[str]:
@@ -187,7 +233,7 @@ def test_the_canary_alert_names_the_image_its_environment_is_serving(env, window
     """The probe can't know the image, so the rule joins it with the images
     the app's save metrics carry, and still fires with none (the app down)."""
     rule = _rules()[f"dnd-canary-failing-{env}"]
-    probe = f'min(avg_over_time(probe_success{{job="dots-and-dashes-canary-{env}"}}[{window}]))'
+    probe = PROD_PROBE if env == "prod" else _probe(env, window)
 
     assert _query(rule) == (
         "group by (image) "

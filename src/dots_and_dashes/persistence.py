@@ -1,5 +1,7 @@
 """The Persistence module: maps Journal domain values to Postgres tables."""
 
+import logging
+import time
 from collections.abc import Iterable
 from dataclasses import replace
 from datetime import date, datetime
@@ -10,6 +12,7 @@ from sqlalchemy import (
     Boolean,
     Date,
     DateTime,
+    Engine,
     ForeignKey,
     Identity,
     Integer,
@@ -438,3 +441,54 @@ def user_by_email(session: Session, email: str) -> tuple[accounts.User, str] | N
 def get_user(session: Session, user_id: int) -> accounts.User | None:
     row = session.get(UserRow, user_id)
     return row.to_user() if row else None
+
+
+# A cold start of Postgres: dev's database Machine stops when idle (ADR-0003,
+# fly.dev-db.toml), and for its first seconds after Fly's proxy starts it again,
+# the proxy refuses the connection ("instance refused connection", which the
+# client sees as refused or closed) and then Postgres answers "the database
+# system is starting up". The app and the release command wait that out.
+COLD_START_SECONDS = 15.0
+_FIRST_WAIT_SECONDS = 0.1
+_LONGEST_WAIT_SECONDS = 2.0
+# What psycopg says, lower-cased, when a cold start refuses a new connection.
+# Anything else, such as a wrong password, fails at once.
+_COLD_START_ERRORS = (
+    "the database system is starting up",
+    "the database system is not yet accepting connections",
+    "connection refused",
+    "server closed the connection unexpectedly",
+)
+
+_log = logging.getLogger(__name__)
+
+
+def survive_cold_start(engine: Engine) -> Engine:
+    """Retry each new connection `engine` makes that a cold start of Postgres
+    refuses, with backoff, for up to COLD_START_SECONDS before failing."""
+
+    @event.listens_for(engine, "do_connect")
+    def connect(dialect, connection_record, cargs, cparams):  # type: ignore[no-untyped-def]
+        deadline = time.monotonic() + COLD_START_SECONDS
+        wait = _FIRST_WAIT_SECONDS
+        while True:
+            try:
+                return dialect.connect(*cargs, **cparams)
+            except dialect.loaded_dbapi.OperationalError as error:
+                if not _is_cold_start(error) or time.monotonic() + wait > deadline:
+                    raise
+                # The error's type only: its message names the database host.
+                _log.warning(
+                    "Postgres refused a connection (%s), as on a cold start: retrying in %.1fs",
+                    type(error).__name__,
+                    wait,
+                )
+                time.sleep(wait)
+                wait = min(wait * 2, _LONGEST_WAIT_SECONDS)
+
+    return engine
+
+
+def _is_cold_start(error: Exception) -> bool:
+    message = str(error).lower()
+    return any(cold in message for cold in _COLD_START_ERRORS)

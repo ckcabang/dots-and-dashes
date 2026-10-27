@@ -6,8 +6,9 @@ from datetime import UTC, datetime
 import pytest
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
+from itsdangerous import TimestampSigner
 
-from dots_and_dashes.web import create_app
+from dots_and_dashes.web import SESSION_CLOCK_HOLD, create_app
 
 # A value for each path parameter, so every route can be asked for.
 PATH_VALUES = {
@@ -177,6 +178,51 @@ def _present(settings, signed: str):
     """Ask for today's Daily Log with a session cookie, as a client that never expires it."""
     with TestClient(create_app(settings), cookies={"session": signed}) as client:
         return client.get("/api/daily-logs/today")
+
+
+def _signed_at(settings, signed: str) -> int:
+    """The whole second a session cookie was signed at, by its own timestamp."""
+    _, signed_at = TimestampSigner(settings.session_secret).unsign(signed, return_timestamp=True)
+    return int(signed_at.timestamp())
+
+
+def test_a_session_on_the_system_clock_survives_it_stepping_back_by_the_hold(
+    settings, host_clock, logged_in
+):
+    with logged_in(create_app(settings)) as client:
+        host_clock["now"] -= SESSION_CLOCK_HOLD
+        after_the_step = client.get("/api/daily-logs/today")
+
+    assert after_the_step.status_code == 200, after_the_step.text
+
+
+@pytest.mark.parametrize(
+    "jump, correction",
+    [
+        pytest.param(24 * 60 * 60, -24 * 60 * 60, id="a day forward, then corrected"),
+        pytest.param(0, -(SESSION_CLOCK_HOLD + 1), id="a second further back than the hold"),
+        pytest.param(0, -60, id="a minute back"),
+    ],
+)
+def test_a_session_signed_after_the_system_clock_is_corrected_is_dated_by_it(
+    settings, host_clock, logged_in, password, user, jump, correction
+):
+    # A bad NTP sync, say, then its correction (issue #71). Logging in again
+    # once the clock is corrected must not sign the cookie at the bad time.
+    with logged_in(create_app(settings)) as client:
+        host_clock["now"] += jump
+        during_the_jump = client.get("/api/daily-logs/today")
+        host_clock["now"] += correction
+        logged_in_again = client.post("/login", data={"email": user, "password": password})
+        signed = client.cookies["session"]
+
+    # A process that never read the bad time: another Machine, or the app restarted.
+    in_a_fresh_process = _present(settings, signed)
+
+    assert during_the_jump.status_code == 200, during_the_jump.text
+    assert logged_in_again.status_code == 200, logged_in_again.text
+    assert _signed_at(settings, signed) == int(host_clock["now"])
+    assert in_a_fresh_process.status_code == 200, in_a_fresh_process.text
 
 
 def test_a_session_on_the_system_clock_expires_after_30_days(settings, host_clock, logged_in):

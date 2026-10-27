@@ -59,6 +59,7 @@ def app_on_the_host(app_database_url: str, monkeypatch) -> Iterator[AppOnTheHost
     yield AppOnTheHost(f"http://127.0.0.1:{port}", host_clock)
     server.should_exit = True
     serving.join(timeout=10)
+    assert not serving.is_alive(), "the app didn't shut down"
 
 
 def test_a_session_survives_the_host_clock_stepping_back_across_a_second(

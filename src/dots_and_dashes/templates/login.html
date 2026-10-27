@@ -3,7 +3,8 @@
 {% block title %}Log in · Dots & Dashes{% endblock %}
 
 {% block content %}
-<h1>Dots & Dashes</h1>
+<h1>Dots &amp; Dashes</h1>
+<p class="tagline">Your bullet journal.</p>
 
 <form method="post" action="/login" class="login">
   {% if refused %}<p role="alert">That email and password don't match.</p>{% endif %}

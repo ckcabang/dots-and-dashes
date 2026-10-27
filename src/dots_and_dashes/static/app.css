@@ -1,0 +1,381 @@
+/* Dots & Dashes: plain and quiet, dark by default. One sans-serif family,
+   neutral greys, one blue accent for the selected Entry, orange for Priority
+   and Migration Count. */
+
+:root {
+  --line: 1.9rem;                 /* one row: an Entry's height */
+  --bg: #1a1d23;
+  --surface: #1a1d23;
+  --text: #eceef2;
+  --text-soft: #c8ccd5;
+  --muted: #a2a8b4;              /* 7:1 on --bg, so muted text still reads */
+  --border-strong: #4a505c;
+  --rule: #2e333c;
+  --accent: #a3b4f7;
+  --selected: #272d3a;            /* the selected Entry's row */
+  --attention: #f5a878;           /* Priority, Inspiration and Migration Count */
+  --done: #7ee08f;                /* every Task in the day done */
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color-scheme: dark;             /* native date pickers, scrollbars and radios match */
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 1.0625rem/1.6 var(--sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: inherit; text-underline-offset: 0.2em; text-decoration-thickness: 1px; }
+a:hover { text-decoration-thickness: 2px; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+
+h1, h2, h3 { font-weight: 650; line-height: 1.2; letter-spacing: -0.015em; }
+h1 { font-size: clamp(1.5rem, 4vw, 1.9rem); margin: 0; letter-spacing: -0.025em; }
+h2 { font-size: 1.15rem; margin: calc(var(--line) * 1.25) 0 0.5rem; }
+h3 { font-size: 0.95rem; font-weight: 500; color: var(--muted); margin: 0.75rem 0 0.25rem; }
+time { font-variant-numeric: tabular-nums; }
+kbd {
+  font: 0.8em var(--sans);
+  padding: 0.05em 0.4em;
+  border: 1px solid var(--rule);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text-soft);
+}
+
+/* ---------- Masthead ---------- */
+
+.masthead {
+  max-width: 44rem;
+  margin: 0 auto;
+  padding: 1rem 1rem 0.9rem;
+  border-bottom: 1px solid var(--rule);
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+}
+.wordmark {
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.wordmark .amp { font-weight: 400; color: var(--muted); }
+.app-nav { display: flex; gap: 1.1rem; flex: 1; overflow-x: auto; }
+.app-nav a {
+  position: relative;
+  text-decoration: none;
+  color: var(--text-soft);
+  font-size: 1rem;
+  padding: 0.5rem 0;
+  white-space: nowrap;
+}
+.app-nav a:hover { color: var(--text); }
+/* The current page is bold, with a short accent rule under it. */
+.app-nav a[aria-current="page"] { color: var(--text); font-weight: 600; }
+.app-nav a[aria-current="page"]::after {
+  content: "";
+  position: absolute;
+  left: 0; bottom: -0.1rem;
+  width: 1rem; height: 2px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+.badge {
+  display: inline-block;
+  min-width: 1.25rem;
+  margin-left: 0.3rem;
+  padding: 0 0.35rem;
+  border-radius: 1rem;
+  background: var(--accent);
+  color: var(--surface);
+  font-size: 0.9rem;
+  font-weight: 600;
+  line-height: 1.25rem;
+  text-align: center;
+}
+.logout { margin: 0; }
+
+/* ---------- The page ---------- */
+
+.sheet {
+  max-width: 44rem;
+  margin: 0 auto 3rem;
+  padding: 2.25rem 1rem 2.5rem;
+}
+body.signed-out .sheet { max-width: 24rem; margin-top: 14vh; }
+
+/* ---------- Buttons and fields ---------- */
+
+button {
+  font: inherit;
+  font-size: 0.9rem;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  padding: 0.4rem 0.9rem;
+  cursor: pointer;
+}
+button:hover { border-color: var(--text-soft); }
+button.primary, .login button, .capture button, .triage form:not(#delete-capture) > button, .future-form button {
+  background: var(--text);
+  border-color: var(--text);
+  color: var(--surface);
+  font-weight: 600;
+}
+button.quiet { border-color: transparent; background: none; color: var(--muted); padding-inline: 0.5rem; }
+button.quiet:hover { color: var(--text); }
+
+input:not([type="radio"]):not([type="checkbox"]) {
+  font: inherit;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  padding: 0.4rem 0.6rem;
+}
+input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent); }
+::placeholder { color: var(--muted); opacity: 1; }
+input[type="radio"] { accent-color: var(--accent); }
+
+/* The quick-entry box: a single underlined line above the list. */
+.sheet input[aria-label="New entry"] {
+  display: block;
+  width: 100%;
+  font-size: 1.05rem;
+  height: calc(var(--line) * 1.5);
+  padding: 0 0 0 var(--line);
+  border: 0;
+  border-bottom: 1.5px solid var(--border-strong);
+  border-radius: 0;
+  background: transparent url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M6 1v10M1 6h10' stroke='%23a2a8b4' stroke-width='1.6' stroke-linecap='round'/%3E%3C/svg%3E") no-repeat 0.45rem center;
+}
+.sheet input[aria-label="New entry"]:focus { box-shadow: none; border-bottom-color: var(--accent); }
+
+/* ---------- Page navigation ---------- */
+
+.day-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: calc(var(--line) * 0.75);
+}
+.day-relative { margin: 0 0 0.15rem; color: var(--muted); font-size: 0.9rem; min-height: 1.35rem; }
+.day-nav { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
+.day-nav form { display: flex; gap: 0.4rem; margin: 0; }
+.day-nav input[type="date"] { height: 2.5rem; padding: 0 0.6rem; font-size: 0.9rem; }
+.day-nav button { height: 2.5rem; padding: 0 0.9rem; }
+.step {
+  display: inline-grid;
+  place-items: center;
+  width: 2.5rem; height: 2.5rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  text-decoration: none;
+  font-size: 1.1rem;
+  line-height: 1;
+}
+.step:hover { border-color: var(--text-soft); }
+
+/* Monthly, Future, Inbox and Migration pages keep a row of text links. */
+.page-nav { display: flex; gap: 1.25rem; flex-wrap: wrap; font-size: 0.9rem; color: var(--text-soft); margin-bottom: 1.25rem; }
+.page-nav > span:empty { display: none; }
+
+/* ---------- Entries ---------- */
+
+.entries {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  min-height: calc(var(--line) * 4);
+}
+#entries.entries { min-height: calc(var(--line) * 6); }
+
+.entry {
+  display: flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  min-height: var(--line);
+  line-height: var(--line);
+  padding-right: 0.5rem;
+  border-radius: 3px;
+}
+.entry--nested { padding-left: var(--line); }
+.entry--nested .state-marker { color: var(--muted); }
+.entry[draggable="true"] { cursor: grab; }
+.entry:focus {
+  outline: none;
+  background: var(--selected);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.state-marker {
+  flex: none;
+  width: var(--line);
+  text-align: center;
+  font-size: 1rem;
+  color: var(--text-soft);
+}
+.entry--migrated .state-marker, .entry--scheduled .state-marker { font-weight: 600; font-size: 0.9rem; }
+
+.entry { position: relative; }
+/* Signifiers hang in the left margin so every bullet lines up. */
+.signifiers { position: absolute; right: 100%; padding-right: 0.15rem; font-weight: 700; color: var(--attention); white-space: nowrap; }
+.entry time { flex: none; color: var(--text-soft); font-size: 0.9rem; }
+.entry-text { flex: 0 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.entry--event .entry-text { font-weight: 500; }
+.entry--note .entry-text { color: var(--text-soft); }
+.entry--completed .entry-text { color: var(--muted); }
+.entry--cancelled .entry-text { text-decoration: line-through; color: var(--muted); }
+.entry--migrated .entry-text, .entry--scheduled .entry-text { color: var(--muted); }
+.migration-count { flex: none; color: var(--attention); font-size: 0.85rem; font-weight: 600; }
+
+.entry input { font: inherit; width: 100%; padding: 0 0.3rem; height: calc(var(--line) - 4px); }
+
+/* ---------- Footer help ---------- */
+
+.shortcuts { margin-top: calc(var(--line) * 1.5); color: var(--muted); font-size: 0.9rem; }
+.shortcuts summary { cursor: pointer; width: fit-content; }
+.shortcuts summary:hover { color: var(--text); }
+.shortcuts dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.35rem 1rem; margin: 0.75rem 0 0; }
+.shortcuts dt { white-space: nowrap; }
+.shortcuts dd { margin: 0; }
+.syntax { margin: 0.4rem 0 0; color: var(--muted); font-size: 0.9rem; }
+.syntax code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.95em; font-weight: 600; color: var(--text-soft); padding: 0 0.15rem; }
+
+/* ---------- Monthly Log calendar ---------- */
+
+.calendar { list-style: none; margin: 0; padding: 0; }
+.calendar li {
+  display: grid;
+  grid-template-columns: 3.25rem 1fr;
+  min-height: var(--line);
+  line-height: var(--line);
+  border-bottom: 1px solid var(--rule);
+  color: var(--text-soft);
+}
+.calendar li a { text-decoration: none; font-variant-numeric: tabular-nums; color: var(--text); }
+.calendar li a:hover { text-decoration: underline; }
+
+/* ---------- Daily Migration ---------- */
+
+#daily-migration p { color: var(--text-soft); }
+.anchor { font-family: var(--sans); font-size: 0.9rem; }
+
+/* ---------- Inbox and Triage ---------- */
+
+.triage { padding: 1.25rem; border: 1px solid var(--rule); border-radius: 6px; margin: 1rem 0; }
+.triage:focus { outline: 2px solid var(--accent); }
+.triage h2 { margin-top: 0; }
+.capture-text {
+  font-size: 1.1rem;
+  margin: 0.5rem 0;
+  padding: 0.5rem 0 0.5rem 1rem;
+  border-left: 3px solid var(--accent);
+}
+.suggestion { color: var(--text-soft); font-size: 0.9rem; }
+.triage form > label { display: grid; gap: 0.25rem; font-size: 0.9rem; color: var(--text-soft); }
+.triage form > label input { width: 100%; font-size: 1rem; }
+.triage fieldset { border: 0; padding: 0; margin: 1rem 0; display: grid; gap: 0.4rem; }
+.triage legend { font-size: 0.9rem; color: var(--text-soft); margin-bottom: 0.25rem; }
+.triage fieldset label { display: flex; align-items: center; gap: 0.5rem; }
+.triage fieldset small { color: var(--muted); }
+.triage form { display: inline-block; margin: 0 0.4rem 0 0; }
+.triage form:first-of-type { display: block; }
+.triage > p:last-child { color: var(--muted); font-size: 0.9rem; }
+.captures { padding-left: 1.25rem; }
+.captures li { line-height: var(--line); }
+.captures a[aria-current] { font-weight: 600; }
+
+/* ---------- Future Log ---------- */
+
+.future-form { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: end; }
+.future-form input[aria-label="New entry"] { flex: 1 1 100%; }
+
+/* ---------- Login and Capture ---------- */
+
+.login label { display: grid; gap: 0.3rem; margin: 0.9rem 0; font-size: 0.9rem; color: var(--text-soft); }
+.login input { width: 100%; font-size: 1rem; }
+.login button { width: 100%; margin-top: 0.5rem; padding: 0.6rem; }
+.login h1, .capture h1 { margin-bottom: 0.25rem; }
+.tagline { color: var(--muted); margin: 0 0 1.5rem; }
+
+.capture input[name="text"] { width: 100%; font-size: 1.25rem; padding: 0.75rem; }
+.capture button { width: 100%; margin-top: 0.75rem; font-size: 1.1rem; padding: 0.75rem; }
+
+[role="alert"] { color: var(--attention); }
+[role="status"] { color: var(--text-soft); }
+
+@media (max-width: 34rem) {
+  .masthead { flex-wrap: wrap; gap: 0.5rem 1rem; }
+  .app-nav { order: 3; flex-basis: 100%; }
+  .logout { margin-left: auto; }
+}
+
+/* ---------- Laws of UX additions ---------- */
+
+/* Mental model: the box shows the Entry type its Prefix will create. */
+.sheet input[aria-label="New entry"][data-type="task"] {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Ccircle cx='6' cy='6' r='2.4' fill='%23a3b4f7'/%3E%3C/svg%3E");
+}
+.sheet input[aria-label="New entry"][data-type="event"] {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Ccircle cx='6' cy='6' r='4.2' fill='none' stroke='%23a3b4f7' stroke-width='1.5'/%3E%3C/svg%3E");
+}
+.sheet input[aria-label="New entry"][data-type="note"] {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M2 6h8' stroke='%23a3b4f7' stroke-width='1.6' stroke-linecap='round'/%3E%3C/svg%3E");
+}
+/* Doherty threshold: the box dims while the save is on its way. */
+form.htmx-request input[aria-label="New entry"] { opacity: 0.55; }
+
+/* Hick and cognitive load: the Prefix hint only while typing. */
+.syntax { transition: opacity 0.15s; }
+form:not(:focus-within) + .syntax { opacity: 0; }
+
+/* Zeigarnik and goal-gradient: progress through the day's Tasks. */
+.progress { display: flex; align-items: center; gap: 0.6rem; margin: 0.5rem 0 0; font-size: 0.9rem; color: var(--muted); }
+.progress[hidden] { display: none; }
+.progress-bar { width: 6rem; height: 4px; border-radius: 4px; background: var(--rule); overflow: hidden; }
+.progress-bar > span { display: block; height: 100%; border-radius: 4px; background: var(--accent); transition: width 0.3s ease-out; }
+/* Peak-end: finishing the day is marked, quietly. */
+.progress--done { color: var(--done); font-weight: 600; }
+.progress--done .progress-bar > span { background: var(--done); }
+.progress--done .progress-label::before { content: "✓ "; }
+
+/* Peak-end: an empty day says what to do next. */
+.empty-hint { color: var(--muted); font-size: 0.9rem; margin: 0.5rem 0 0 var(--line); }
+#entries.entries:has(+ .empty-hint:not([hidden])) { min-height: 0; }
+
+/* Von Restorff: a Priority Entry stands out from the list. */
+.entry:has(.signifier--priority) .entry-text { font-weight: 600; }
+
+/* Similarity: month controls match the day's. */
+.step--disabled { opacity: 0.35; pointer-events: none; }
+.pill { font-size: 0.9rem; margin-right: 0.4rem; }
+
+/* Chunking and Fitts: the calendar groups by week, and a whole row opens its day. */
+.calendar li { position: relative; padding-left: 0.4rem; border-radius: 4px; }
+.calendar li a::after { content: ""; position: absolute; inset: 0; }
+.calendar li:hover { background: var(--selected); }
+.calendar li.week-start:not(:first-child) { margin-top: 0.9rem; }
+.calendar li.weekend a { color: var(--muted); }
+.calendar li.is-today { background: var(--selected); box-shadow: inset 2px 0 0 var(--accent); }
+.calendar li.is-today a { color: var(--accent); font-weight: 700; }
+
+/* Fitts on touch screens: taller rows; keyboard shortcuts don't apply there. */
+@media (pointer: coarse) {
+  :root { --line: 2.5rem; }
+  .shortcuts { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .progress-bar > span, .syntax { transition: none; }
+}

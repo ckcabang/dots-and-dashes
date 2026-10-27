@@ -3,36 +3,35 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#17191e">
   <title>{% block title %}Dots & Dashes{% endblock %}</title>
   <script src="/static/htmx.min.js" defer></script>
   <script src="/static/keyboard.js" defer></script>
-  <style>
-    body { font-family: system-ui, sans-serif; max-width: 40rem; margin: 2rem auto; padding: 0 1rem; }
-    input[name="text"] { width: 100%; font-size: 1.1rem; padding: 0.5rem; box-sizing: border-box; }
-    .entries { list-style: none; padding: 0; }
-    .entry { padding: 0.25rem 0; }
-    .state-marker { display: inline-block; width: 1.5rem; }
-    .entry--nested { padding-left: 1.5rem; }
-    .entry:focus { outline: none; background: #eef; }
-    .entry--cancelled .entry-text { text-decoration: line-through; color: #777; }
-    .entry--migrated .entry-text, .entry--scheduled .entry-text { color: #777; }
-    .migration-count { color: #a50; font-size: 0.85em; }
-    .entry input { font: inherit; width: 100%; box-sizing: border-box; }
-    .day-nav { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; }
-    .login label { display: block; margin: 0.5rem 0; }
-    .logout { text-align: right; }
-    .capture input[name="text"], .capture button { font-size: 1.25rem; padding: 0.75rem; }
-    .capture button { width: 100%; margin-top: 0.5rem; }
-    .triage fieldset label { display: block; margin: 0.25rem 0; }
-    .triage:focus { outline: 2px solid #99c; }
-    .capture-text { font-family: ui-monospace, monospace; margin: 0.5rem 0; }
-  </style>
+  <script src="/static/journal-ui.js" defer></script>
+  <link rel="stylesheet" href="/static/app.css">
 </head>
-<body{% if today is defined %} data-today="{{ today.isoformat() }}"{% endif %}>
+<body{% if today is defined %} data-today="{{ today.isoformat() }}"{% else %} class="signed-out"{% endif %}>
   {# Journal pages pass today, and only they are behind a login. #}
   {% if today is defined %}
-  <form method="post" action="/logout" class="logout"><button>Log out</button></form>
+  {%- set path = request.url.path if request is defined else "" -%}
+  {%- macro current(match) -%}{% if match %} aria-current="page"{% endif %}{%- endmacro -%}
+  <header class="masthead">
+    <a class="wordmark" href="/">Dots <span class="amp">&amp;</span> Dashes</a>
+    <nav class="app-nav" aria-label="Journal">
+      <a href="/"{{ current(path == "/" or path.startswith("/days")) }}>Day</a>
+      <a href="/months"{{ current(path.startswith("/months") or path.startswith("/monthly-review")) }}>Month</a>
+      <a href="/future"{{ current(path.startswith("/future")) }}>Future</a>
+      <a href="/migration"{{ current(path.startswith("/migration")) }}>Migration</a>
+      <a href="/inbox"{{ current(path.startswith("/inbox")) }}
+         {%- if inbox_count is defined %} id="inbox" aria-keyshortcuts="i" aria-label="Inbox ({{ inbox_count }})"{% endif %}>Inbox
+        {%- if inbox_count %}<span class="badge">{{ inbox_count }}</span>{% endif %}</a>
+    </nav>
+    <form method="post" action="/logout" class="logout"><button class="quiet">Log out</button></form>
+  </header>
   {% endif %}
-  {% block content %}{% endblock %}
+  <div class="sheet">
+    {% block content %}{% endblock %}
+  </div>
 </body>
 </html>

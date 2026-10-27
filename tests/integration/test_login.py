@@ -151,6 +151,68 @@ def test_a_session_survives_the_host_clock_stepping_backwards(
     assert after_the_step.status_code == 200, after_the_step.text
 
 
+@pytest.fixture
+def host_clock(monkeypatch):
+    """The host's wall clock, which the app's system clock reads: held still until moved."""
+    host_clock = {"now": 1_800_000_000.2}
+    monkeypatch.setattr(time, "time", lambda: host_clock["now"])
+    return host_clock
+
+
+def test_a_session_on_the_system_clock_survives_it_stepping_backwards(
+    settings, host_clock, logged_in
+):
+    # As in prod, dev and the browser suite's app container (issue #64).
+    with logged_in(create_app(settings)) as client:
+        host_clock["now"] -= 0.459
+        after_the_step = client.get("/api/daily-logs/today")
+        host_clock["now"] += 2
+        after_catching_up = client.get("/api/daily-logs/today")
+
+    assert after_the_step.status_code == 200, after_the_step.text
+    assert after_catching_up.status_code == 200, after_catching_up.text
+
+
+def _present(settings, signed: str):
+    """Ask for today's Daily Log with a session cookie, as a client that never expires it."""
+    with TestClient(create_app(settings), cookies={"session": signed}) as client:
+        return client.get("/api/daily-logs/today")
+
+
+def test_a_session_on_the_system_clock_expires_after_30_days(settings, host_clock, logged_in):
+    with logged_in(create_app(settings)) as client:
+        signed = client.cookies["session"]
+
+    host_clock["now"] += 30 * 24 * 60 * 60
+    on_its_last_second = _present(settings, signed)
+    host_clock["now"] += 1
+    expired = _present(settings, signed)
+
+    assert on_its_last_second.status_code == 200, on_its_last_second.text
+    assert expired.status_code == 401, expired.text
+
+
+@pytest.mark.unauthorized_requests
+def test_a_tampered_session_on_the_system_clock_is_refused(settings, host_clock, logged_in):
+    with logged_in(create_app(settings)) as client:
+        signed = client.cookies["session"]
+        client.cookies.set("session", signed[:-4] + "AAAA")
+        tampered = client.get("/api/daily-logs/today")
+
+    assert tampered.status_code == 401, tampered.text
+
+
+def test_a_session_dated_after_the_system_clock_is_refused(settings, host_clock, logged_in):
+    with logged_in(create_app(settings)) as client:
+        signed = client.cookies["session"]
+    host_clock["now"] -= 60
+
+    # A process that never read the later time: another Machine, or the app restarted.
+    future_dated = _present(settings, signed)
+
+    assert future_dated.status_code == 401, future_dated.text
+
+
 @pytest.mark.unauthorized_requests
 def test_logging_out_ends_the_session(settings, clock, logged_in):
     with logged_in(create_app(settings, clock=clock)) as client:

@@ -293,19 +293,25 @@ SESSION_USER = "user_id"
 
 
 class _ClockedSigner(TimestampSigner):
-    """Dates a session cookie by the app's Clock rather than the host's wall clock.
+    """Dates a session cookie by the app's Clock, held from running backwards.
 
     itsdangerous refuses a cookie whose whole-second timestamp is later than
     now. A host clock that steps backwards across a second (WSL2 does, by up to
-    half a second) would make a cookie signed a moment ago look forged.
+    half a second) would make a cookie signed a moment ago look forged. So the
+    signer never reads a time earlier than the latest it has read: through a
+    step back it holds still until the clock catches up. Held, it is never
+    behind the clock, so a session expires no later than by the clock itself,
+    and a cookie dated after any time this process has read is still refused.
     """
 
     def __init__(self, secret_key: str, clock: Clock) -> None:
         super().__init__(secret_key)
         self._clock = clock
+        self._latest = 0
 
     def get_timestamp(self) -> int:
-        return int(self._clock().timestamp())
+        self._latest = max(self._latest, int(self._clock().timestamp()))
+        return self._latest
 
 
 class _ClockedSessionMiddleware(SessionMiddleware):

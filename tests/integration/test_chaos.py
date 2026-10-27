@@ -4,11 +4,14 @@ Injected save failures and latency must look, in the save metrics and
 traces, like the real incidents the alerts and runbooks are written for.
 """
 
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 
 import pytest
+from opentelemetry.sdk.trace import SpanProcessor
 
+from dots_and_dashes.chaos import SaveChaos
 from dots_and_dashes.web import create_app
 
 
@@ -144,9 +147,48 @@ def test_a_bad_switch_value_stops_the_app_starting_and_names_the_switch(
         create_app()
 
 
+class _CheckoutsWaiting(SpanProcessor):
+    """Notes when a checkout begins with every connection already in use."""
+
+    def __init__(self) -> None:
+        self.began = threading.Event()
+
+    def on_start(self, span, parent_context=None) -> None:
+        attributes = span.attributes or {}
+        if span.name == "db.connection.checkout" and attributes.get(
+            "db.client.connection.used"
+        ) == attributes.get("db.client.connection.max"):
+            self.began.set()
+
+
+class _HoldUntilACheckoutWaits:
+    """The app's chaos switch, made to hold its connection until the other
+    save is waiting for it, and only then for the whole latency.
+
+    Without it the two saves need not overlap: a second save that starts
+    late waits only for what is left of the first one's hold.
+    """
+
+    def __init__(self, chaos: SaveChaos, waiting: threading.Event) -> None:
+        self._chaos = chaos
+        self._waiting = waiting
+
+    @property
+    def on(self) -> bool:
+        return self._chaos.on
+
+    def save(self) -> None:
+        assert self._waiting.wait(timeout=5), "no other save waited for the connection"
+        self._chaos.save()
+
+
 def test_an_exhausted_pool_shows_as_a_long_connection_checkout(settings, start, signals):
+    waiting = _CheckoutsWaiting()
+    signals.telemetry.tracer_provider.add_span_processor(waiting)
     # One connection, held for 300ms by each slow save: the second save waits.
     with start(replace(settings, db_pool_size=1, chaos_save_latency_ms=300)) as client:
+        state = client.app.state
+        state.save_chaos = _HoldUntilACheckoutWaits(state.save_chaos, waiting.began)
         with ThreadPoolExecutor(2) as pool:
             responses = list(
                 pool.map(
@@ -158,7 +200,8 @@ def test_an_exhausted_pool_shows_as_a_long_connection_checkout(settings, start, 
     assert [response.status_code for response in responses] == [201, 201]
     waits = [span for span in signals.spans() if span.name == "db.connection.checkout"]
     longest = max(waits, key=seconds)
-    assert seconds(longest) >= 0.2
+    # It waited out the first save's whole hold, which began after it did.
+    assert seconds(longest) >= 0.3
     # It began with every connection in use.
     assert longest.attributes and dict(longest.attributes) == {
         "db.system.name": "postgresql",

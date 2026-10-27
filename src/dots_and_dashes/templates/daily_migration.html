@@ -3,8 +3,7 @@
 {% block title %}Daily Migration · Dots & Dashes{% endblock %}
 
 {% block content %}
-<nav class="day-nav" aria-label="Logs">
-  <a href="/">← Today</a>
+<nav class="page-nav" aria-label="Logs">
   <a href="/days/{{ planning.isoformat() }}">{{ planning.strftime("%A") }}'s Daily Log</a>
 </nav>
 

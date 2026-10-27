@@ -1,30 +1,55 @@
 {% extends "base.html" %}
 
 {% block content %}
-<nav class="day-nav" aria-label="Days">
-  <a id="previous-day" href="/days/{{ previous_day.isoformat() }}" aria-keyshortcuts="[">← Previous day</a>
-  <form method="get" action="/days">
-    <input type="date" name="date" value="{{ day.isoformat() }}" aria-label="Go to date" required>
-    <button>Go</button>
-  </form>
-  <a href="/months">Monthly Log</a>
-  <a href="/migration">Daily Migration</a>
-  <a id="inbox" href="/inbox" aria-keyshortcuts="i">Inbox ({{ inbox_count }})</a>
-  <a id="next-day" href="/days/{{ next_day.isoformat() }}" aria-keyshortcuts="]">Next day →</a>
-</nav>
-
-<h1><time datetime="{{ day.isoformat() }}">{{ day.strftime("%A, %-d %B %Y") }}</time></h1>
+<div class="day-header">
+  <div>
+    <p class="day-relative">
+      {%- if day == today %}Today{% elif next_day == today %}Yesterday{% elif previous_day == today %}Tomorrow{% endif -%}
+    </p>
+    <h1><time datetime="{{ day.isoformat() }}">{{ day.strftime("%A, %-d %B %Y") }}</time></h1>
+    {# The Journal's day_progress; journal-ui.js redraws it when the list changes. #}
+    <p id="day-progress" class="progress{% if progress.all_completed %} progress--completed{% endif %}"{% if not progress.total %} hidden{% endif %}>
+      <span class="progress-bar" aria-hidden="true"><span style="width: {{ (100 * progress.completed / progress.total) | round | int if progress.total else 0 }}%"></span></span>
+      <span class="progress-label">{% if progress.all_completed %}All Tasks completed{% else %}{{ progress.completed }} of {{ progress.total }} Tasks completed{% endif %}</span>
+    </p>
+  </div>
+  <nav class="day-nav" aria-label="Days">
+    <a id="previous-day" class="step" href="/days/{{ previous_day.isoformat() }}" aria-keyshortcuts="[" aria-label="Previous day" title="Previous day ([)">‹</a>
+    <form method="get" action="/days">
+      <input type="date" name="date" value="{{ day.isoformat() }}" aria-label="Go to date" required>
+      <button>Go</button>
+    </form>
+    <a id="next-day" class="step" href="/days/{{ next_day.isoformat() }}" aria-keyshortcuts="]" aria-label="Next day" title="Next day (])">›</a>
+  </nav>
+</div>
 
 <form method="post" action="/entries"
       hx-post="/entries" hx-target="#entries" hx-swap="innerHTML"
       hx-on::after-request="if (event.detail.successful) this.reset()">
   <input type="hidden" name="day" value="{{ day.isoformat() }}">
-  <input name="text" aria-label="New entry" autocomplete="off" autofocus required pattern=".*\S.*">
+  <input name="text" aria-label="New entry" autocomplete="off" autofocus required pattern=".*\S.*"
+         placeholder="Add a task" aria-describedby="entry-syntax">
 </form>
+<p class="syntax" id="entry-syntax">Start with <code>o</code> for an Event, <code>-</code> for a Note, <code>*</code> for Priority; add a time like <code>14:00</code>.</p>
 
 <ul id="entries" class="entries">
   {% include "_entries.html" %}
 </ul>
+<p id="empty-hint" class="empty-hint"{% if entries %} hidden{% endif %}>Nothing logged for this day yet. Type in the box above and press Enter.</p>
+
+<details class="shortcuts">
+  <summary>Keyboard shortcuts</summary>
+  <dl>
+    <dt><kbd>Esc</kbd> / <kbd>↓</kbd></dt><dd>leave the box for the list</dd>
+    <dt><kbd>j</kbd> <kbd>k</kbd></dt><dd>move between Entries</dd>
+    <dt><kbd>x</kbd> <kbd>c</kbd> <kbd>o</kbd></dt><dd>complete, cancel, reopen</dd>
+    <dt><kbd>e</kbd></dt><dd>edit</dd>
+    <dt><kbd>m</kbd> <kbd>M</kbd> <kbd>s</kbd></dt><dd>migrate to the planned day, to its month, or schedule</dd>
+    <dt><kbd>Tab</kbd> <kbd>Shift</kbd>+<kbd>Tab</kbd></dt><dd>nest or un-nest a Note</dd>
+    <dt><kbd>Alt</kbd>+<kbd>↑</kbd> <kbd>↓</kbd></dt><dd>reorder an untimed Entry</dd>
+    <dt><kbd>[</kbd> <kbd>]</kbd> <kbd>i</kbd></dt><dd>previous day, next day, Inbox</dd>
+  </dl>
+</details>
 
 <script>
   // [ and ] go to the previous and next day, and i to the Inbox. They are shortcuts only outside

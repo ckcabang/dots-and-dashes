@@ -3,15 +3,11 @@
 {% block title %}Future Log · Dots & Dashes{% endblock %}
 
 {% block content %}
-<nav class="day-nav" aria-label="Logs">
-  <a href="/months/{{ today.strftime('%Y-%m') }}">← Monthly Log</a>
-</nav>
-
 <h1>Future Log</h1>
 
 {% if refused %}<p role="alert">{{ refused }}</p>{% endif %}
 
-<form method="post" action="/future/entries">
+<form method="post" action="/future/entries" class="future-form">
   <input name="text" aria-label="New entry" value="{{ typed.text if typed else '' }}" autocomplete="off" autofocus required pattern=".*\S.*">
   <input type="month" name="month" aria-label="Month" min="{{ first_month.strftime('%Y-%m') }}" value="{{ typed.month if typed else first_month.strftime('%Y-%m') }}" required>
   <input type="date" name="date" aria-label="Date (optional)" min="{{ first_month.isoformat() }}" value="{{ typed.on or '' if typed else '' }}">

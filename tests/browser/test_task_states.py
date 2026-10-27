@@ -1,3 +1,5 @@
+from datetime import date, timedelta
+from random import randrange
 from uuid import uuid4
 
 from playwright.sync_api import Page, expect
@@ -87,3 +89,21 @@ def test_escape_abandons_an_edit(page: Page):
     task = page.get_by_role("listitem").filter(has_text=text)
     expect(task).to_be_focused()
     expect(page.get_by_label("Edit entry")).to_have_count(0)
+
+
+def test_the_progress_line_follows_tasks_completed_from_the_keyboard(page: Page):
+    # A day of its own, far ahead, so other runs' Entries don't change the count.
+    day = date(2200, 1, 1) + timedelta(days=randrange(36500))
+    page.goto(f"/days/{day.isoformat()}")
+    progress = page.locator("#day-progress")
+    expect(progress).to_be_hidden()
+
+    _log_tasks(page, "call mum", "pay rent")
+    expect(progress).to_have_text("0 of 2 Tasks completed")
+
+    page.keyboard.press("Escape")
+    page.keyboard.press("x")
+    expect(progress).to_have_text("1 of 2 Tasks completed")
+    page.keyboard.press("k")
+    page.keyboard.press("x")
+    expect(progress).to_have_text("All Tasks completed")

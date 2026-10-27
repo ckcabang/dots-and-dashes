@@ -212,6 +212,41 @@ def test_a_completed_or_cancelled_task_can_be_reopened(act):
     assert reopened == _open_task()
 
 
+def test_day_progress_counts_completed_tasks_against_open_and_completed_ones():
+    def task(id, state):
+        return replace(_stored(id, "task"), state=state)
+
+    daily_log = [
+        task(1, journal.TaskState.COMPLETED),
+        task(2, journal.TaskState.OPEN),
+        task(3, journal.TaskState.MIGRATED),
+        task(4, journal.TaskState.SCHEDULED),
+        task(5, journal.TaskState.CANCELLED),
+        replace(_stored(6, "lunch"), type=journal.EntryType.EVENT, state=None),
+    ]
+
+    progress = journal.day_progress(daily_log)
+
+    assert (progress.completed, progress.total) == (1, 2)
+    assert not progress.all_completed
+
+
+def test_a_day_is_all_completed_when_every_counted_task_is():
+    daily_log = [
+        journal.complete(_open_task()),
+        journal.cancel(_stored(8, "call bank")),
+    ]
+
+    assert journal.day_progress(daily_log).all_completed
+
+
+def test_a_day_with_no_open_or_completed_tasks_has_no_progress_to_show():
+    progress = journal.day_progress([journal.cancel(_open_task())])
+
+    assert progress.total == 0
+    assert not progress.all_completed
+
+
 def test_an_open_task_cannot_be_reopened():
     with pytest.raises(journal.TaskStateError):
         journal.reopen(_open_task())

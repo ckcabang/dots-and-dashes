@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
-"""File or update the On-call agent's incident issue, and nothing else.
+"""The On-call agent's incident issues: find, read, file and update them, and nothing else.
 
+    scripts/on-call/incident open                       the open incidents
+    scripts/on-call/incident view    <issue number>     one issue, with its comments
     scripts/on-call/incident create  --title <text> --body <text> [--ready-for-human]
     scripts/on-call/incident comment <issue number> --body <text> [--ready-for-human]
 
@@ -10,41 +12,68 @@ open incident and can label it `ready-for-human`.
 
 The title and body are text arguments only: there is no way to hand gh a file
 (no --body-file, no -F), another repository (no --repo) or any other label.
-gh runs with the GitHub token and no other: the Fly, Grafana and Anthropic
-tokens in the workflow's environment never reach it, so no issue can quote one.
+The issues are public, so a title or body holding a token is refused: any
+token this script can see (its environment, the files in ON_CALL_TOKENS), any
+8-character run of one, or anything shaped like an Anthropic, Fly, GitHub or
+Grafana token. gh runs with the GitHub token and no other.
 """
 
-import argparse
-import os
+import re
 import subprocess
 import sys
 
-from on_call_env import child_env
+from on_call_lib import QuietParser, child_env, known_secrets, token
 
 LABEL = "incident"
 LABEL_COLOR = "B60205"
 LABEL_DESCRIPTION = "Filed by the On-call agent"
 HANDOFF = "ready-for-human"
+# Token shapes refused even when this script can't see the token itself.
+TOKEN_SHAPES = re.compile(r"sk-ant-|FlyV1 |fm[12]_|gh[opsur]_|github_pat_|glsa_|glc_")
+RUN = 8
+
+
+class Refused(Exception):
+    """The issue would carry a token: nothing was filed."""
+
+
+def check(field: str, text: str) -> None:
+    """Refuse TEXT if it holds a token, a RUN-character run of one, or a token's shape."""
+    if TOKEN_SHAPES.search(text):
+        raise Refused(f"the {field} holds something shaped like a token")
+    for secret in known_secrets():
+        runs = (
+            {secret}
+            if len(secret) < RUN
+            else {secret[i : i + RUN] for i in range(len(secret) - RUN + 1)}
+        )
+        if any(run in text for run in runs):
+            raise Refused(f"the {field} holds a token, or part of one")
 
 
 def gh(*args: str) -> None:
-    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+    github_token = token("GH_TOKEN") or token("GITHUB_TOKEN")
     subprocess.run(
-        ["gh", *args], env=child_env(**({"GH_TOKEN": token} if token else {})), check=True
+        ["gh", *args],
+        env=child_env(**({"GH_TOKEN": github_token} if github_token else {})),
+        check=True,
     )
 
 
 def issue_number(value: str) -> str:
     if not (value.isdecimal() and value.isascii()):
-        raise argparse.ArgumentTypeError(f"an issue number, not {value!r}")
+        raise ValueError("not an issue number")
     return value
 
 
-def parser() -> argparse.ArgumentParser:
-    top = argparse.ArgumentParser(
+def parser() -> QuietParser:
+    top = QuietParser(
         prog="scripts/on-call/incident", description=__doc__.split("\n")[0], allow_abbrev=False
     )
     commands = top.add_subparsers(dest="command", required=True)
+    commands.add_parser("open", allow_abbrev=False)
+    view = commands.add_parser("view", allow_abbrev=False)
+    view.add_argument("number", type=issue_number)
     create = commands.add_parser("create", allow_abbrev=False)
     create.add_argument("--title", required=True)
     create.add_argument("--body", required=True)
@@ -59,15 +88,26 @@ def parser() -> argparse.ArgumentParser:
 def main(argv: list[str]) -> int:
     args = parser().parse_args(argv)
     try:
-        if args.command == "create":
+        if args.command == "open":
+            gh("issue", "list", "--label", LABEL, "--state", "open",
+               "--json", "number,title,url,labels,createdAt")  # fmt: skip
+        elif args.command == "view":
+            gh("issue", "view", args.number, "--json", "number,title,body,labels,comments,url")
+        elif args.command == "create":
+            check("title", args.title)
+            check("body", args.body)
             gh("label", "create", LABEL, "--force",
                "--color", LABEL_COLOR, "--description", LABEL_DESCRIPTION)  # fmt: skip
-            labels = ["--label", LABEL] + (["--label", HANDOFF] if args.ready_for_human else [])
-            gh("issue", "create", "--title", args.title, "--body", args.body, *labels)
+            labels = [f"--label={LABEL}"] + ([f"--label={HANDOFF}"] if args.ready_for_human else [])
+            gh("issue", "create", f"--title={args.title}", f"--body={args.body}", *labels)
         else:
-            gh("issue", "comment", args.number, "--body", args.body)
+            check("body", args.body)
+            gh("issue", "comment", args.number, f"--body={args.body}")
             if args.ready_for_human:
-                gh("issue", "edit", args.number, "--add-label", HANDOFF)
+                gh("issue", "edit", args.number, f"--add-label={HANDOFF}")
+    except Refused as refused:
+        print(f"Refused: {refused}. Nothing was filed.", file=sys.stderr)
+        return 2
     except subprocess.CalledProcessError as failed:
         print(f"gh failed ({failed.returncode}): see its output above", file=sys.stderr)
         return 1

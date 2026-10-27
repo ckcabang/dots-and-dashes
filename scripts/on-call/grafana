@@ -8,10 +8,11 @@ For example:
     scripts/on-call/grafana 'api/prometheus/grafana/api/v1/rules'
     scripts/on-call/grafana 'api/datasources/proxy/uid/grafanacloud-prom/api/v1/query?query=up'
 
-GRAFANA_URL and GRAFANA_VIEWER_TOKEN come from the environment (the On-call
-workflow sets them from a repo variable and a secret) or, for a local agent,
+In the On-call workflow GRAFANA_URL comes from the environment and
+GRAFANA_VIEWER_TOKEN from its file in ON_CALL_TOKENS. A local agent reads both
 from the .env file scripts/provision-oncall writes (ENV_FILE overrides its
-path). Prints the response body; a status other than 2xx fails.
+path). Prints the response body; a status other than 2xx fails. A refusal
+never repeats the path back, and any token in Grafana's answer is redacted.
 """
 
 import os
@@ -20,7 +21,15 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from on_call_lib import known_secrets, token
+
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def redacted(text: str) -> str:
+    for secret in known_secrets():
+        text = text.replace(secret, "[redacted]")
+    return text
 
 
 def from_env_file(key: str) -> str:
@@ -49,10 +58,11 @@ def main(argv: list[str]) -> int:
         return 2
     (path,) = argv
     if path.startswith("/") or "://" in path or ".." in path.split("?")[0].split("/"):
-        print(f"Refused: {path!r} must be a path relative to Grafana's own URL", file=sys.stderr)
+        print("Refused: the path must be relative to Grafana's own URL", file=sys.stderr)
         return 2
-    url, token = setting("GRAFANA_URL").rstrip("/"), setting("GRAFANA_VIEWER_TOKEN")
-    if not (url and token):
+    url = setting("GRAFANA_URL").rstrip("/")
+    viewer_token = token("GRAFANA_VIEWER_TOKEN") or from_env_file("GRAFANA_VIEWER_TOKEN")
+    if not (url and viewer_token):
         print(
             "GRAFANA_URL and GRAFANA_VIEWER_TOKEN must be set (scripts/provision-oncall)",
             file=sys.stderr,
@@ -61,7 +71,7 @@ def main(argv: list[str]) -> int:
     request = urllib.request.Request(
         f"{url}/{path}",
         headers={
-            "Authorization": f"Bearer {token}",
+            "Authorization": f"Bearer {viewer_token}",
             "Accept": "application/json",
         },
     )
@@ -69,9 +79,10 @@ def main(argv: list[str]) -> int:
     opener = urllib.request.build_opener(NoRedirects)
     try:
         with opener.open(request, timeout=60) as response:
-            sys.stdout.write(response.read().decode())
+            sys.stdout.write(redacted(response.read().decode()))
     except urllib.error.HTTPError as error:
-        print(f"Grafana answered {error.code}: {error.read().decode()[:2000]}", file=sys.stderr)
+        body = redacted(error.read().decode()[:2000])
+        print(f"Grafana answered {error.code}: {body}", file=sys.stderr)
         return 1
     except Exception as error:  # no traceback: it would quote the request
         print(f"Couldn't reach Grafana: {type(error).__name__}", file=sys.stderr)

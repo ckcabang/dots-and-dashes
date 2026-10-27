@@ -5,22 +5,21 @@
     scripts/on-call/remedy flag-off   <dev|prod> <FLAG_...>
     scripts/on-call/remedy raise-pool <dev|prod> <size> --above <db.client.connection.max>
 
-Each runs flyctl with that environment's own deploy token, from
-FLY_DEV_API_TOKEN or FLY_PROD_API_TOKEN (without one, flyctl's own login),
-and no other token in its environment.
-docs/runbooks/README.md gives when to use each.
+Each runs flyctl with that environment's own deploy token, FLY_DEV_API_TOKEN
+or FLY_PROD_API_TOKEN (from its file in ON_CALL_TOKENS, or the environment;
+without one, flyctl's own login), and no other token in its environment.
+Its messages never repeat an argument back. docs/runbooks/README.md gives
+when to use each.
 """
 
-import argparse
 import json
-import os
 import re
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any
 
-from on_call_env import child_env
+from on_call_lib import QuietParser, child_env, token
 
 ROOT = Path(__file__).resolve().parents[2]
 ENVIRONMENTS = {
@@ -43,8 +42,8 @@ class Refused(Exception):
 
 def flyctl(env: str, *args: str, capture: bool = False) -> str:
     """Run flyctl as ENV's deploy token, and with no other token at all."""
-    token = os.environ.get(ENVIRONMENTS[env]["token"])
-    environ = child_env(**({"FLY_API_TOKEN": token} if token else {}))
+    deploy_token = token(ENVIRONMENTS[env]["token"])
+    environ = child_env(**({"FLY_API_TOKEN": deploy_token} if deploy_token else {}))
     print("+ flyctl " + " ".join(args), file=sys.stderr)
     result = subprocess.run(
         ["flyctl", *args],
@@ -87,7 +86,7 @@ def rollback(env: str, bad: str) -> None:
         raise Refused(f"{app} has no release to read: nothing rolled back")
     current = _field(ok[0], "imageref")
     if not _same_image(current, bad):
-        raise Refused(f"{app} runs {current} now, not the alert's {bad}: nothing rolled back")
+        raise Refused(f"{app} runs {current} now, not the alert's image: nothing rolled back")
     previous = next(
         (_field(r, "imageref") for r in ok if not _same_image(_field(r, "imageref"), current)), None
     )
@@ -107,7 +106,7 @@ def known_flags() -> set[str]:
 def flag_off(env: str, flag: str) -> None:
     if flag not in known_flags():
         raise Refused(
-            f"{flag} is not a feature flag the app reads ({', '.join(sorted(known_flags()))})"
+            f"that is not a feature flag the app reads ({', '.join(sorted(known_flags()))})"
         )
     app = ENVIRONMENTS[env]["app"]
     flyctl(env, "secrets", "set", "-a", app, f"{flag}=off")
@@ -127,9 +126,7 @@ def _pool_size_set(env: str) -> bool:
 
 def raise_pool(env: str, size: str, above: str) -> None:
     if not (size.isdecimal() and size.isascii() and above.isdecimal() and above.isascii()):
-        raise Refused(
-            f"the pool size and --above must be whole numbers, not {size!r} and {above!r}"
-        )
+        raise Refused("the pool size and --above must be whole numbers")
     if int(size) <= int(above):
         raise Refused(f"DB_POOL_SIZE={size} doesn't raise the pool above {above}")
     if int(size) > MAX_POOL_SIZE:
@@ -150,8 +147,8 @@ def raise_pool(env: str, size: str, above: str) -> None:
 
 
 def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(
-        prog="scripts/on-call/remedy", description=__doc__.split("\n")[0]
+    parser = QuietParser(
+        prog="scripts/on-call/remedy", description=__doc__.split("\n")[0], allow_abbrev=False
     )
     remedies = parser.add_subparsers(dest="remedy", required=True)
     for name in ["rollback", "flag-off", "raise-pool"]:

@@ -6,15 +6,16 @@
     scripts/on-call/fly secrets  <dev|prod>   the secrets set (names and digests, never values)
     scripts/on-call/fly logs     <dev|prod>   recent logs, without following them
 
-Each runs flyctl with that environment's own deploy token, from
-FLY_DEV_API_TOKEN or FLY_PROD_API_TOKEN (without one, flyctl's own login).
+Each runs flyctl with that environment's own deploy token, FLY_DEV_API_TOKEN
+or FLY_PROD_API_TOKEN (from its file in ON_CALL_TOKENS, or the environment;
+without one, flyctl's own login). A wrong call prints this usage, never the
+arguments it was given.
 """
 
-import os
 import subprocess
 import sys
 
-from on_call_env import child_env
+from on_call_lib import child_env, token
 
 APPS = {"dev": "dots-and-dashes-dev", "prod": "dots-and-dashes"}
 TOKENS = {"dev": "FLY_DEV_API_TOKEN", "prod": "FLY_PROD_API_TOKEN"}
@@ -31,9 +32,9 @@ def main(argv: list[str]) -> int:
         print(__doc__, file=sys.stderr)
         return 2
     command, env = argv
-    token = os.environ.get(TOKENS[env])
+    deploy_token = token(TOKENS[env])
     # flyctl gets this environment's token and no other: none can reach its output.
-    environ = child_env(**({"FLY_API_TOKEN": token} if token else {}))
+    environ = child_env(**({"FLY_API_TOKEN": deploy_token} if deploy_token else {}))
     try:
         return subprocess.run(["flyctl", *COMMANDS[command](APPS[env])], env=environ).returncode
     except OSError as error:

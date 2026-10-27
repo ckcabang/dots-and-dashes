@@ -1,0 +1,427 @@
+{
+  "title": "key-journey",
+  "folderUid": "dots-and-dashes",
+  "interval": 60,
+  "rules": [
+    {
+      "uid": "dnd-save-failures-prod",
+      "title": "Save failures (prod)",
+      "condition": "B",
+      "data": [
+        {
+          "refId": "A",
+          "relativeTimeRange": {
+            "from": 600,
+            "to": 0
+          },
+          "datasourceUid": "${PROMETHEUS_UID}",
+          "model": {
+            "refId": "A",
+            "expr": "(sum by (image) (rate(entry_saves_total{job=\"prod/dots-and-dashes\", outcome=\"failed\"}[10m])) or sum by (image) (rate(entry_saves_total{job=\"prod/dots-and-dashes\", outcome=~\"saved|failed\"}[10m])) * 0) / sum by (image) (rate(entry_saves_total{job=\"prod/dots-and-dashes\", outcome=~\"saved|failed\"}[10m]))",
+            "instant": true,
+            "range": false,
+            "editorMode": "code",
+            "intervalMs": 60000,
+            "maxDataPoints": 43200
+          }
+        },
+        {
+          "refId": "B",
+          "relativeTimeRange": {
+            "from": 0,
+            "to": 0
+          },
+          "datasourceUid": "__expr__",
+          "model": {
+            "refId": "B",
+            "type": "threshold",
+            "expression": "A",
+            "datasource": {
+              "type": "__expr__",
+              "uid": "__expr__"
+            },
+            "conditions": [
+              {
+                "evaluator": {
+                  "type": "gt",
+                  "params": [
+                    0.05
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "noDataState": "OK",
+      "execErrState": "Error",
+      "for": "1m",
+      "isPaused": false,
+      "labels": {
+        "service": "dots-and-dashes",
+        "env": "prod",
+        "alert": "save-failures"
+      },
+      "annotations": {
+        "summary": "Entry saves are failing on prod",
+        "description": "{{ humanizePercentage $values.A.Value }} of Entry saves on prod failed over the last 10 minutes (threshold 5%), on image {{ $labels.image }}.",
+        "environment": "prod",
+        "image": "{{ $labels.image }}",
+        "runbook_url": "https://github.com/ckcabang/dots-and-dashes/blob/main/docs/runbooks/README.md#alert-save-failures",
+        "dashboard_url": "${GRAFANA_URL}/d/dots-and-dashes-key-journey?var-env=prod&var-image={{ $labels.image | urlquery }}",
+        "__dashboardUid__": "dots-and-dashes-key-journey",
+        "__panelId__": "1"
+      }
+    },
+    {
+      "uid": "dnd-save-latency-prod",
+      "title": "Save latency (prod)",
+      "condition": "B",
+      "data": [
+        {
+          "refId": "A",
+          "relativeTimeRange": {
+            "from": 600,
+            "to": 0
+          },
+          "datasourceUid": "${PROMETHEUS_UID}",
+          "model": {
+            "refId": "A",
+            "expr": "histogram_quantile(0.95, sum by (le, image) (rate(entry_save_duration_seconds_bucket{job=\"prod/dots-and-dashes\", outcome=~\"saved|failed\"}[10m])))",
+            "instant": true,
+            "range": false,
+            "editorMode": "code",
+            "intervalMs": 60000,
+            "maxDataPoints": 43200
+          }
+        },
+        {
+          "refId": "B",
+          "relativeTimeRange": {
+            "from": 0,
+            "to": 0
+          },
+          "datasourceUid": "__expr__",
+          "model": {
+            "refId": "B",
+            "type": "threshold",
+            "expression": "A",
+            "datasource": {
+              "type": "__expr__",
+              "uid": "__expr__"
+            },
+            "conditions": [
+              {
+                "evaluator": {
+                  "type": "gt",
+                  "params": [
+                    1
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "noDataState": "OK",
+      "execErrState": "Error",
+      "for": "1m",
+      "isPaused": false,
+      "labels": {
+        "service": "dots-and-dashes",
+        "env": "prod",
+        "alert": "save-latency"
+      },
+      "annotations": {
+        "summary": "Entry saves are slow on prod",
+        "description": "p95 Entry save latency on prod is {{ humanizeDuration $values.A.Value }} over the last 10 minutes (threshold 1s), on image {{ $labels.image }}.",
+        "environment": "prod",
+        "image": "{{ $labels.image }}",
+        "runbook_url": "https://github.com/ckcabang/dots-and-dashes/blob/main/docs/runbooks/README.md#alert-save-latency",
+        "dashboard_url": "${GRAFANA_URL}/d/dots-and-dashes-key-journey?var-env=prod&var-image={{ $labels.image | urlquery }}",
+        "__dashboardUid__": "dots-and-dashes-key-journey",
+        "__panelId__": "3"
+      }
+    },
+    {
+      "uid": "dnd-save-failures-dev",
+      "title": "Save failures (dev)",
+      "condition": "B",
+      "data": [
+        {
+          "refId": "A",
+          "relativeTimeRange": {
+            "from": 600,
+            "to": 0
+          },
+          "datasourceUid": "${PROMETHEUS_UID}",
+          "model": {
+            "refId": "A",
+            "expr": "(sum by (image) (rate(entry_saves_total{job=\"dev/dots-and-dashes\", outcome=\"failed\"}[10m])) or sum by (image) (rate(entry_saves_total{job=\"dev/dots-and-dashes\", outcome=~\"saved|failed\"}[10m])) * 0) / sum by (image) (rate(entry_saves_total{job=\"dev/dots-and-dashes\", outcome=~\"saved|failed\"}[10m]))",
+            "instant": true,
+            "range": false,
+            "editorMode": "code",
+            "intervalMs": 60000,
+            "maxDataPoints": 43200
+          }
+        },
+        {
+          "refId": "B",
+          "relativeTimeRange": {
+            "from": 0,
+            "to": 0
+          },
+          "datasourceUid": "__expr__",
+          "model": {
+            "refId": "B",
+            "type": "threshold",
+            "expression": "A",
+            "datasource": {
+              "type": "__expr__",
+              "uid": "__expr__"
+            },
+            "conditions": [
+              {
+                "evaluator": {
+                  "type": "gt",
+                  "params": [
+                    0.05
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "noDataState": "OK",
+      "execErrState": "Error",
+      "for": "1m",
+      "isPaused": false,
+      "labels": {
+        "service": "dots-and-dashes",
+        "env": "dev",
+        "alert": "save-failures"
+      },
+      "annotations": {
+        "summary": "Entry saves are failing on dev",
+        "description": "{{ humanizePercentage $values.A.Value }} of Entry saves on dev failed over the last 10 minutes (threshold 5%), on image {{ $labels.image }}.",
+        "environment": "dev",
+        "image": "{{ $labels.image }}",
+        "runbook_url": "https://github.com/ckcabang/dots-and-dashes/blob/main/docs/runbooks/README.md#alert-save-failures",
+        "dashboard_url": "${GRAFANA_URL}/d/dots-and-dashes-key-journey?var-env=dev&var-image={{ $labels.image | urlquery }}",
+        "__dashboardUid__": "dots-and-dashes-key-journey",
+        "__panelId__": "1"
+      }
+    },
+    {
+      "uid": "dnd-save-latency-dev",
+      "title": "Save latency (dev)",
+      "condition": "B",
+      "data": [
+        {
+          "refId": "A",
+          "relativeTimeRange": {
+            "from": 600,
+            "to": 0
+          },
+          "datasourceUid": "${PROMETHEUS_UID}",
+          "model": {
+            "refId": "A",
+            "expr": "histogram_quantile(0.95, sum by (le, image) (rate(entry_save_duration_seconds_bucket{job=\"dev/dots-and-dashes\", outcome=~\"saved|failed\"}[10m])))",
+            "instant": true,
+            "range": false,
+            "editorMode": "code",
+            "intervalMs": 60000,
+            "maxDataPoints": 43200
+          }
+        },
+        {
+          "refId": "B",
+          "relativeTimeRange": {
+            "from": 0,
+            "to": 0
+          },
+          "datasourceUid": "__expr__",
+          "model": {
+            "refId": "B",
+            "type": "threshold",
+            "expression": "A",
+            "datasource": {
+              "type": "__expr__",
+              "uid": "__expr__"
+            },
+            "conditions": [
+              {
+                "evaluator": {
+                  "type": "gt",
+                  "params": [
+                    1
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "noDataState": "OK",
+      "execErrState": "Error",
+      "for": "1m",
+      "isPaused": false,
+      "labels": {
+        "service": "dots-and-dashes",
+        "env": "dev",
+        "alert": "save-latency"
+      },
+      "annotations": {
+        "summary": "Entry saves are slow on dev",
+        "description": "p95 Entry save latency on dev is {{ humanizeDuration $values.A.Value }} over the last 10 minutes (threshold 1s), on image {{ $labels.image }}.",
+        "environment": "dev",
+        "image": "{{ $labels.image }}",
+        "runbook_url": "https://github.com/ckcabang/dots-and-dashes/blob/main/docs/runbooks/README.md#alert-save-latency",
+        "dashboard_url": "${GRAFANA_URL}/d/dots-and-dashes-key-journey?var-env=dev&var-image={{ $labels.image | urlquery }}",
+        "__dashboardUid__": "dots-and-dashes-key-journey",
+        "__panelId__": "3"
+      }
+    },
+    {
+      "uid": "dnd-canary-failing-prod",
+      "title": "Canary failing (prod)",
+      "condition": "B",
+      "data": [
+        {
+          "refId": "A",
+          "relativeTimeRange": {
+            "from": 300,
+            "to": 0
+          },
+          "datasourceUid": "${PROMETHEUS_UID}",
+          "model": {
+            "refId": "A",
+            "expr": "group by (image) (last_over_time(entry_saves_total{job=\"prod/dots-and-dashes\"}[5m])) * 0 + on() group_left() min(avg_over_time(probe_success{job=\"dots-and-dashes-canary-prod\"}[5m])) or on() min(avg_over_time(probe_success{job=\"dots-and-dashes-canary-prod\"}[5m]))",
+            "instant": true,
+            "range": false,
+            "editorMode": "code",
+            "intervalMs": 60000,
+            "maxDataPoints": 43200
+          }
+        },
+        {
+          "refId": "B",
+          "relativeTimeRange": {
+            "from": 0,
+            "to": 0
+          },
+          "datasourceUid": "__expr__",
+          "model": {
+            "refId": "B",
+            "type": "threshold",
+            "expression": "A",
+            "datasource": {
+              "type": "__expr__",
+              "uid": "__expr__"
+            },
+            "conditions": [
+              {
+                "evaluator": {
+                  "type": "lt",
+                  "params": [
+                    0.8
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "noDataState": "Alerting",
+      "execErrState": "Error",
+      "for": "1m",
+      "isPaused": false,
+      "labels": {
+        "service": "dots-and-dashes",
+        "env": "prod",
+        "alert": "canary-failing"
+      },
+      "annotations": {
+        "summary": "The canary is failing on prod",
+        "description": "The canary passed {{ humanizePercentage $values.A.Value }} of its runs on prod over the last 5 minutes (threshold 80%), or stopped reporting. It logs in as the Canary User, then saves, reads back and deletes an Entry; the check's logs name the step that failed. Image: {{ if $labels.image }}{{ $labels.image }}{{ else }}none, the app saved nothing in the window{{ end }}. This environment's canary runs every minute, so the window is 5 minutes: five runs or so. No data means the canary stopped, which fires. The prod and dev canary rules differ only in their job, this window and what no data means.",
+        "environment": "prod",
+        "image": "{{ if $labels.image }}{{ $labels.image }}{{ else }}none: the app saved nothing in the window{{ end }}",
+        "runbook_url": "https://github.com/ckcabang/dots-and-dashes/blob/main/docs/runbooks/README.md#alert-canary-failing",
+        "dashboard_url": "${GRAFANA_URL}/d/dots-and-dashes-key-journey?var-env=prod&var-image={{ if $labels.image }}{{ $labels.image | urlquery }}{{ else }}$__all{{ end }}",
+        "__dashboardUid__": "dots-and-dashes-key-journey",
+        "__panelId__": "4"
+      }
+    },
+    {
+      "uid": "dnd-canary-failing-dev",
+      "title": "Canary failing (dev)",
+      "condition": "B",
+      "data": [
+        {
+          "refId": "A",
+          "relativeTimeRange": {
+            "from": 2100,
+            "to": 0
+          },
+          "datasourceUid": "${PROMETHEUS_UID}",
+          "model": {
+            "refId": "A",
+            "expr": "group by (image) (last_over_time(entry_saves_total{job=\"dev/dots-and-dashes\"}[35m])) * 0 + on() group_left() min(avg_over_time(probe_success{job=\"dots-and-dashes-canary-dev\"}[35m])) or on() min(avg_over_time(probe_success{job=\"dots-and-dashes-canary-dev\"}[35m]))",
+            "instant": true,
+            "range": false,
+            "editorMode": "code",
+            "intervalMs": 60000,
+            "maxDataPoints": 43200
+          }
+        },
+        {
+          "refId": "B",
+          "relativeTimeRange": {
+            "from": 0,
+            "to": 0
+          },
+          "datasourceUid": "__expr__",
+          "model": {
+            "refId": "B",
+            "type": "threshold",
+            "expression": "A",
+            "datasource": {
+              "type": "__expr__",
+              "uid": "__expr__"
+            },
+            "conditions": [
+              {
+                "evaluator": {
+                  "type": "lt",
+                  "params": [
+                    0.8
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "noDataState": "OK",
+      "execErrState": "Error",
+      "for": "1m",
+      "isPaused": false,
+      "labels": {
+        "service": "dots-and-dashes",
+        "env": "dev",
+        "alert": "canary-failing"
+      },
+      "annotations": {
+        "summary": "The canary is failing on dev",
+        "description": "The canary passed {{ humanizePercentage $values.A.Value }} of its runs on dev over the last 35 minutes (threshold 80%), or stopped reporting. It logs in as the Canary User, then saves, reads back and deletes an Entry; the check's logs name the step that failed. Image: {{ if $labels.image }}{{ $labels.image }}{{ else }}none, the app saved nothing in the window{{ end }}. This environment's canary runs every 15 minutes, so the window is 35 minutes: always two runs or more. No data (the check paused or deleted) resolves rather than firing for good. The prod and dev canary rules differ only in their job, this window and what no data means.",
+        "environment": "dev",
+        "image": "{{ if $labels.image }}{{ $labels.image }}{{ else }}none: the app saved nothing in the window{{ end }}",
+        "runbook_url": "https://github.com/ckcabang/dots-and-dashes/blob/main/docs/runbooks/README.md#alert-canary-failing",
+        "dashboard_url": "${GRAFANA_URL}/d/dots-and-dashes-key-journey?var-env=dev&var-image={{ if $labels.image }}{{ $labels.image | urlquery }}{{ else }}$__all{{ end }}",
+        "__dashboardUid__": "dots-and-dashes-key-journey",
+        "__panelId__": "4"
+      }
+    }
+  ]
+}

@@ -17,7 +17,7 @@ The local User's "today" is UTC; set `LOCAL_USER_TIMEZONE` (an IANA name, e.g. `
 
 ### Users on a deployed app
 
-There is no sign-up page, and only Compose makes the local User. On Fly the release command only migrates, so create the User, and the Canary User for monitoring, from the command line on the app's Machine (`scripts/provision-dev` and `scripts/provision-prod` walk through it), with the password from a secret (the `USER_PASSWORD` environment variable, or the one `--password-env` names) or typed at a prompt:
+There is no sign-up page, and only Compose makes the local User. On Fly the release command only migrates, so create the User, and the Canary User for monitoring, from the command line on the app's Machine (`scripts/provision-dev` and `scripts/provision-prod` walk through it, and `scripts/provision-canary` for the Canary User), with the password from a secret (the `USER_PASSWORD` environment variable, or the one `--password-env` names), piped in with `--password-stdin`, or typed at a prompt:
 
 ```sh
 fly ssh console -a <app> --pty -C "/app/.venv/bin/dots-and-dashes create-user --email me@example.com --timezone America/Los_Angeles"
@@ -75,4 +75,12 @@ Prod is `dots-and-dashes` ([`fly.prod.toml`](fly.prod.toml)) and its own Postgre
 
 ```sh
 scripts/provision-prod
+```
+
+### Canary and alerts
+
+Two Grafana Synthetic Monitoring scripted checks run [`monitoring/canary.js`](monitoring/canary.js), each as its environment's Canary User: log in, log an Entry, read it back, delete it. One runs against prod every minute, the other against dev every 15 minutes. That steady traffic is what the save failure and save latency alerts fire on, with one real User. The alert rules ([`monitoring/alert-rules.json`](monitoring/alert-rules.json)) and the key journey dashboard ([`monitoring/dashboard.json`](monitoring/dashboard.json)) live in the repo; the runbook for each alert is [`docs/runbooks/README.md`](docs/runbooks/README.md). CI runs the canary once against the Compose test stack. To create both Canary Users, store their passwords as Synthetic Monitoring secrets, create both checks, import the rules and dashboard, and fire the dev alerts once, run its wizard once prod is up:
+
+```sh
+scripts/provision-canary
 ```

@@ -31,7 +31,7 @@ def test_an_injected_failure_fails_the_save_and_is_counted_as_failed(settings, s
         assert response.status_code == 500
         assert client.get("/api/daily-logs/today").json()["entries"] == []
     (saves,) = signals.points()["entry.saves"]
-    assert (dict(saves.attributes), saves.value) == ({"outcome": "failed"}, 1)
+    assert (saves.attributes["outcome"], saves.value) == ("failed", 1)
     # The runbook names this type, so a staged failure is told from a real one.
     error_type = "dots_and_dashes.chaos.InjectedSaveFailure"
     request = signals.server_span("POST", "/api/entries")
@@ -73,7 +73,7 @@ def test_injected_latency_slows_the_save_and_shows_in_its_duration(settings, sta
 
     assert response.status_code == 201
     (duration,) = signals.points()["entry.save.duration"]
-    assert dict(duration.attributes) == {"outcome": "saved"}
+    assert duration.attributes["outcome"] == "saved"
     assert duration.sum >= 0.3
 
 

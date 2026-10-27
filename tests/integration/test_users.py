@@ -1,5 +1,7 @@
 """Each User's journal is theirs alone, and Users come only from the CLI."""
 
+import io
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -127,3 +129,31 @@ def test_creating_a_user_if_missing_leaves_an_existing_user_alone(
         assert client.post("/login", data=second).status_code == 401
         first = {"email": "local@example.com", "password": "the first password"}
         assert client.post("/login", data=first, follow_redirects=False).status_code == 303
+
+
+def test_the_canary_users_password_can_be_piped_in_on_stdin(
+    settings, monkeypatch, logged_in, app
+):
+    """How scripts/provision-canary creates the Canary User on prod: the
+    password it was given goes in on stdin, never on a command line."""
+    monkeypatch.setenv("DATABASE_URL", settings.database_url)
+    monkeypatch.delenv("USER_PASSWORD", raising=False)
+    monkeypatch.setattr(cli.sys, "stdin", io.StringIO("correct horse battery staple\n"))
+
+    cli.main(
+        ["create-user", "--canary", "--email", "canary@example.com", "--timezone", "UTC"]
+        + ["--password-stdin"]
+    )
+
+    with logged_in(app, email="canary@example.com") as client:
+        assert client.get("/api/daily-logs/today").status_code == 200
+
+
+def test_an_empty_password_on_stdin_is_refused(settings, monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", settings.database_url)
+    monkeypatch.setattr(cli.sys, "stdin", io.StringIO(""))
+
+    with pytest.raises(SystemExit, match="empty"):
+        cli.main(
+            ["create-user", "--email", "me@example.com", "--timezone", "UTC", "--password-stdin"]
+        )

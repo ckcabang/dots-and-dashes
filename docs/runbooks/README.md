@@ -1,21 +1,41 @@
 # Runbooks
 
-Two alerts guard the key journey (log an Entry on today's Daily Log):
+Three alerts guard the key journey (log an Entry on today's Daily Log). Their rules are `monitoring/alert-rules.json` and their panels are on the **Dots & Dashes: key journey** dashboard (`monitoring/dashboard.json`); `scripts/provision-canary` imports both into Grafana Cloud.
 
 - **Save failures**: Entry save failure rate above 5% over 10 minutes.
-- **Save latency**: p95 Entry save latency above 1s.
+- **Save latency**: p95 Entry save latency above 1s, over 10 minutes.
+- **Canary failing**: the canary passed under 80% of its runs: over 5 minutes on prod (it runs every minute), or 35 minutes on dev (every 15 minutes). On prod, a canary that stops reporting fires too.
 
-Both read prod's save metrics, as Grafana Cloud's Prometheus names them. Every series carries `job="<environment>/dots-and-dashes"`, because the app sets `service.namespace` to its `DEPLOYMENT_ENVIRONMENT`. Selecting `job="prod/dots-and-dashes"` therefore keeps incidents staged on dev from firing prod's alerts. Refused saves, such as blank text, are the User's doing and count as neither success nor failure:
+The two save alerts read the save metrics, as Grafana Cloud's Prometheus names them. Every series carries `job="<environment>/dots-and-dashes"`, because the app sets `service.namespace` to its `DEPLOYMENT_ENVIRONMENT`, and `image`, the deployed image (`FLY_IMAGE_REF`). Each save alert has a prod rule and a dev rule that differ only in that `job` selector, so an incident staged on dev fires the dev rule and never prod's. They are counted by image, so a notification names the image whose saves fail. Refused saves, such as blank text, are the User's doing and count as neither success nor failure:
 
 ```promql
-# Save failure rate, prod
-sum(rate(entry_saves_total{job="prod/dots-and-dashes", outcome="failed"}[10m]))
-  / sum(rate(entry_saves_total{job="prod/dots-and-dashes", outcome=~"saved|failed"}[10m]))
-# p95 save latency in seconds, prod
-histogram_quantile(0.95, sum by (le) (rate(entry_save_duration_seconds_bucket{job="prod/dots-and-dashes", outcome=~"saved|failed"}[10m])))
+# Save failure rate, prod, by image
+(sum by (image) (rate(entry_saves_total{job="prod/dots-and-dashes", outcome="failed"}[10m]))
+  or sum by (image) (rate(entry_saves_total{job="prod/dots-and-dashes", outcome=~"saved|failed"}[10m])) * 0)
+  / sum by (image) (rate(entry_saves_total{job="prod/dots-and-dashes", outcome=~"saved|failed"}[10m]))
+# p95 save latency in seconds, prod, by image
+histogram_quantile(0.95, sum by (le, image) (rate(entry_save_duration_seconds_bucket{job="prod/dots-and-dashes", outcome=~"saved|failed"}[10m])))
 ```
 
-To watch a staged incident on dev, run the same queries with `job="dev/dots-and-dashes"`. A failed save's span and its `Entry save failed` log share a trace ID and carry `error.type`; the latency histogram's exemplars link to slow traces.
+To watch a staged incident on dev, run the same queries with `job="dev/dots-and-dashes"`, or pick `dev` on the dashboard. A failed save's span and its `Entry save failed` log share a trace ID and carry `error.type`; the latency histogram's exemplars link to slow traces.
+
+Every notification carries the environment, the image, a link to the dashboard filtered to both, the alert's panel (Grafana's own panel link) and this runbook's section for it.
+
+## Alert: Save failures
+
+- **Means**: more than 5% of Entry saves answered 500 over the last 10 minutes, on the image the notification names. At one canary save a minute, a single failed save is enough.
+- **First look**: the dashboard's **Save failure rate** and **Saves by outcome** panels, then the failed saves' traces and `Entry save failed` logs (search Tempo for `error.type`). A new image starting to fail right after a release is a [bad deploy](#bad-deploy--roll-back); failures only from flagged requests are a [broken feature flag](#broken-feature-flag--turn-it-off).
+
+## Alert: Save latency
+
+- **Means**: the p95 Entry save took over 1s over the last 10 minutes.
+- **First look**: an exemplar on the **p95 save latency** panel opens a slow save's trace. Time in a long `db.connection.checkout` span is an [exhausted pool](#db-connection-pool-exhausted--raise-the-pool-size-and-redeploy).
+
+## Alert: Canary failing
+
+- **Means**: a Synthetic Monitoring check running `monitoring/canary.js` passed under 80% of its runs in the window. On prod that is 2 or more failures in the last 5 runs; on dev, any failure among its 2 or 3. The checks are `dots-and-dashes-canary-prod`, which runs every minute and is read over 5 minutes, and `dots-and-dashes-canary-dev`, which runs every 15 minutes and is read over 35 minutes, so that window always holds two runs or more. On prod, a check that stops reporting fires too. On dev, no data resolves, so a paused dev check doesn't fire for good. Otherwise the two rules differ only in their `job`. The check logs in as its environment's Canary User and expects 303, saves an Entry (201), reads it back (200) and deletes it (204). A lost login answers 401, which the save metrics count as refused, so this is the only alert that sees it.
+- **First look**: the check's logs in Synthetic Monitoring name the step and status that failed. A failed save also shows on the save alerts. A 401 on the save, or a log in that isn't 303, means the Canary User's login broke: its password must match its Synthetic Monitoring secret, `canary-password` on prod or `canary-password-dev` on dev (`scripts/provision-canary`). On dev, a run that times out may just be a cold start, since dev stops when idle. The check's timeout is 120s to cover one. The probe can't know the image, so the rule joins its pass rate with the images the app's save metrics carried over the same window. That gives one notification per image serving the environment, or one naming no image when the app saved nothing (the app is down).
+- **Budget**: at one probe location the two checks use about 46k of the free tier's 100k test executions a month (prod every minute, about 43,200; dev every 15 minutes, about 2,900). Each extra probe location multiplies that, so keep one.
 
 The On-call agent (`.claude/agents/on-call.md`) applies only the three remedies below (ADR-0002). Anything else goes to the human through an incident issue labelled `ready-for-human`.
 
@@ -24,6 +44,14 @@ Stage each scenario on dev with the chaos switch or the flag and pool settings b
 ## Staging an incident
 
 Set these as Fly secrets on dev (`fly secrets set -a dots-and-dashes-dev NAME=value`, which restarts the app) and unset them to end the incident. Unset, the app behaves exactly as without them.
+
+Dev's canary saves only once every 15 minutes, too rarely to fire dev's save alerts in good time. Drive more saves with the canary script as dev's Canary User (`scripts/provision-canary` creates it), from a file holding `canary-password-dev=<its password>`:
+
+```sh
+k6 run -i 50 --secret-source=file=canary.secrets -e CANARY_ENV=dev monitoring/canary.js
+```
+
+The 10-minute windows keep the saves counted for 10 minutes after the run.
 
 - **`CHAOS_SAVE_ERROR_RATE`**: the share of Entry saves to fail, from 0 to 1. The failures are spread evenly, not drawn at random: `0.25` fails exactly every fourth save on each Machine. The failure alert fires above 5%, so stage it with more than `0.05`. A failed save answers 500, counts as `outcome="failed"`, and its span and `Entry save failed` log carry `error.type="dots_and_dashes.chaos.InjectedSaveFailure"`.
 - **`CHAOS_SAVE_LATENCY_MS`**: milliseconds to slow every Entry save by, while it holds its database connection. It shows in `entry.save.duration` and as the time between the save's checkout and its first statement.

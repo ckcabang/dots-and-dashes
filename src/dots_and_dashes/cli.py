@@ -48,6 +48,12 @@ def _parser() -> argparse.ArgumentParser:
         "(default USER_PASSWORD); prompted for when unset",
     )
     create_user.add_argument(
+        "--password-stdin",
+        action="store_true",
+        help="read the password from the first line of stdin instead, for a script "
+        "that pipes it in (scripts/provision-canary), so it is never on a command line",
+    )
+    create_user.add_argument(
         "--if-missing",
         action="store_true",
         help="leave a User who already has this email alone instead of refusing; "
@@ -61,7 +67,9 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _password(variable: str) -> str:
+def _password(variable: str, from_stdin: bool) -> str:
+    if from_stdin:
+        return sys.stdin.readline().rstrip("\r\n")
     if password := os.environ.get(variable):
         return password
     password = getpass.getpass("Password: ")
@@ -97,7 +105,7 @@ def main(argv: list[str] | None = None) -> None:
         _migrate()
         return
     try:
-        password_hash = accounts.hash_password(_password(args.password_env))
+        password_hash = accounts.hash_password(_password(args.password_env, args.password_stdin))
     except ValueError as exc:
         sys.exit(str(exc))
     engine = create_engine(Settings.from_env().database_url)

@@ -1,5 +1,6 @@
 # Gate every pull request on `make check`: mypy, then the unit, integration
-# and browser suites against the test Compose stack (Postgres + app container).
+# and browser suites against the test Compose stack (Postgres + app container),
+# then one run of the canary script (monitoring/canary.js) against that stack.
 # It also runs on main, because a pull request can only restore caches saved
 # by itself or by main.
 name: CI
@@ -55,6 +56,29 @@ jobs:
 
       - name: Typecheck and test
         run: make check
+
+      - uses: grafana/setup-k6-action@v1.2.2
+        with:
+          k6-version: 2.3.0
+
+      # The canary script Synthetic Monitoring runs against prod, once, against
+      # the test stack `make check` left running, as a Canary User of its own.
+      # The project name and port lookup are the Makefile's TEST_PROJECT and
+      # test_port: keep them in step.
+      - name: Run the canary once against the test stack
+        run: |
+          export COMPOSE_PROJECT_NAME="dots-and-dashes-test-$(printf '%s' "$PWD" | cksum | cut -d' ' -f1)"
+          export DB_PORT=0 APP_PORT=0 FLAG_MONTHLY_REVIEW=on
+          CANARY_PASSWORD=$(openssl rand -hex 24)
+          export CANARY_PASSWORD
+          docker compose exec -T -e CANARY_PASSWORD app dots-and-dashes create-user \
+            --canary --email canary@dots-and-dashes.invalid --timezone UTC \
+            --password-env CANARY_PASSWORD
+          secrets="$RUNNER_TEMP/canary.secrets"
+          (umask 077 && printf 'canary-password=%s\n' "$CANARY_PASSWORD" > "$secrets")
+          k6 run --secret-source="file=$secrets" \
+            -e BASE_URL="http://localhost:$(docker compose port app 8000 | sed 's/.*://')" \
+            monitoring/canary.js
 
       - name: Show test stack logs
         if: failure()

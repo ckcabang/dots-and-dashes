@@ -602,8 +602,10 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        engine = telemetry.create_engine(
-            settings.database_url, pool_pre_ping=True, **_pool_size(settings)
+        engine = persistence.survive_cold_start(
+            telemetry.create_engine(
+                settings.database_url, pool_pre_ping=True, **_pool_size(settings)
+            )
         )
         app.state.sessionmaker = sessionmaker(engine)
         yield

@@ -6,6 +6,7 @@ the sandbox's mask leaves it. The script runs there as an agent would run it.
 """
 
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -41,6 +42,11 @@ def write(root: Path, files: Files) -> None:
         path = root / name
         if content is None:
             path.unlink()
+            # As git does, leave no directory empty.
+            for parent in path.relative_to(root).parents[:-1]:
+                if any((root / parent).iterdir()):
+                    break
+                (root / parent).rmdir()
         else:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(content)
@@ -177,6 +183,24 @@ def test_a_clean_merge_that_changes_claude_commits_it_without_writing_it(
     assert wt.read("notes.md") == "notes v2\n"
     assert "scratch.txt" not in wt.tracked()
     wt.assert_merged(status="?? scratch.txt")
+
+
+def test_a_merge_that_turns_a_directory_into_a_file_writes_the_file(
+    tmp_path: Path, git_env: dict[str, str]
+) -> None:
+    wt = Worktree(
+        tmp_path,
+        git_env,
+        base={"d/x.txt": "x\n"},
+        main=CLAUDE_CHANGE | {"d/x.txt": None, "d": "now a file\n"},
+        feature={"y.md": "y\n"},
+    )
+
+    result = wt.sync("main")
+
+    assert result.returncode == 0, result.stderr
+    assert wt.read("d") == "now a file\n"
+    wt.assert_merged()
 
 
 def test_a_conflict_outside_claude_writes_markers_and_stops(
@@ -580,3 +604,202 @@ def test_continue_commits_a_resolved_file_moved_to_a_new_name(
     assert "app.py" not in wt.tracked()
     assert "scratch.txt" not in wt.tracked()
     wt.assert_merged(status="?? scratch.txt")
+
+
+@dataclass(frozen=True)
+class Kind:
+    """One kind of conflict `git merge-tree` reports, made beside the app.py one.
+
+    A path may name `{main}`, main's commit: merge-tree moves a file out of a
+    directory's way to `<name>~<side>`, and names main's side by its commit."""
+
+    base: Files
+    main: Files
+    feature: Files
+    # The paths the start lists as conflicted, beside app.py.
+    conflicted: list[str]
+    # The ones holding conflict markers once the start writes them.
+    markers: list[str]
+    # Two resolutions: keeping a version of the change, and deleting.
+    keep: Files
+    delete: Files
+
+
+TEXT = "one\ntwo\nthree\n"
+KINDS = {
+    "modify/modify": Kind(
+        base={"f.txt": TEXT},
+        main={"f.txt": TEXT + "main\n"},
+        feature={"f.txt": TEXT + "feature\n"},
+        conflicted=["f.txt"],
+        markers=["f.txt"],
+        keep={"f.txt": TEXT + "both\n"},
+        delete={"f.txt": None},
+    ),
+    "modify/delete": Kind(
+        base={"f.txt": TEXT},
+        main={"f.txt": TEXT + "main\n"},
+        feature={"f.txt": None},
+        conflicted=["f.txt"],
+        markers=[],
+        keep={"f.txt": TEXT + "main\n"},
+        delete={"f.txt": None},
+    ),
+    "delete/modify": Kind(
+        base={"f.txt": TEXT},
+        main={"f.txt": None},
+        feature={"f.txt": TEXT + "feature\n"},
+        conflicted=["f.txt"],
+        markers=[],
+        keep={"f.txt": TEXT + "feature\n"},
+        delete={"f.txt": None},
+    ),
+    "rename/delete": Kind(
+        base={"f.txt": TEXT},
+        main={"f.txt": None, "g.txt": TEXT},
+        feature={"f.txt": None},
+        conflicted=["g.txt"],
+        markers=[],
+        keep={"g.txt": TEXT},
+        delete={"g.txt": None},
+    ),
+    "delete/rename": Kind(
+        base={"f.txt": TEXT},
+        main={"f.txt": None},
+        feature={"f.txt": None, "g.txt": TEXT},
+        conflicted=["g.txt"],
+        markers=[],
+        keep={"g.txt": TEXT},
+        delete={"g.txt": None},
+    ),
+    "rename/rename": Kind(
+        base={"f.txt": TEXT},
+        main={"f.txt": None, "a.txt": TEXT},
+        feature={"f.txt": None, "b.txt": TEXT},
+        # The source too, though neither side has it.
+        conflicted=["a.txt", "b.txt", "f.txt"],
+        markers=[],
+        keep={"a.txt": TEXT, "b.txt": None},
+        delete={"a.txt": None, "b.txt": None},
+    ),
+    "add/add": Kind(
+        base={},
+        main={"n.txt": "main\n"},
+        feature={"n.txt": "feature\n"},
+        conflicted=["n.txt"],
+        markers=["n.txt"],
+        keep={"n.txt": "both\n"},
+        delete={"n.txt": None},
+    ),
+    "file/directory": Kind(
+        base={},
+        main={"d": "main\n"},
+        feature={"d/x.txt": "x\n"},
+        conflicted=["d~{main}"],
+        markers=[],
+        keep={"d~{main}": None, "d.txt": "main\n"},
+        delete={"d~{main}": None},
+    ),
+    "directory/file": Kind(
+        base={},
+        main={"d/x.txt": "x\n"},
+        feature={"d": "feature\n"},
+        conflicted=["d~HEAD"],
+        markers=[],
+        keep={"d~HEAD": None, "d.txt": "feature\n"},
+        delete={"d~HEAD": None},
+    ),
+}
+
+
+def named(files: Files, main: str) -> Files:
+    return {name.format(main=main): content for name, content in files.items()}
+
+
+def kind_conflict(tmp_path: Path, env: dict[str, str], kind: Kind) -> Worktree:
+    return conflicted(tmp_path, env, base=kind.base, main=kind.main, feature=kind.feature)
+
+
+@pytest.mark.parametrize("recorded", ["NUL-separated", "one per line"])
+@pytest.mark.parametrize("resolution", ["keep", "delete"])
+@pytest.mark.parametrize("name", KINDS)
+def test_continue_finishes_every_kind_of_conflict_once_it_is_resolved(
+    tmp_path: Path, git_env: dict[str, str], name: str, resolution: str, recorded: str
+) -> None:
+    kind = KINDS[name]
+    wt = kind_conflict(tmp_path, git_env, kind)
+    paths = ["app.py", *(path.format(main=wt.main) for path in kind.conflicted)]
+
+    started = wt.sync("main")
+
+    assert started.returncode == 1, started.stderr
+    assert {f"  {path}" for path in paths} <= set(started.stderr.splitlines())
+    if recorded == "one per line":
+        # How the script recorded a merge before NUL-separated paths.
+        (wt.state() / "conflicted").write_text("".join(f"{path}\n" for path in paths))
+
+    def refused_as_gone(result: subprocess.CompletedProcess[str]) -> bool:
+        """An old-format path that's gone may be an unusual name, C-quoted:
+        --continue refuses it however the rest is resolved."""
+        gone = [path for path in paths if not (wt.path / path).exists()]
+        if recorded == "NUL-separated" or not gone:
+            return False
+        assert result.returncode == 1
+        assert {f"  {path}" for path in gone} <= set(result.stderr.splitlines())
+        assert wt.head() == wt.before
+        assert wt.pending()
+        return True
+
+    refused = wt.sync("--continue")
+    if refused_as_gone(refused):
+        return
+
+    assert refused.returncode == 1
+    assert "conflict markers remain" in refused.stderr
+    assert wt.head() == wt.before
+
+    write(wt.path, RESOLVED)
+    if kind.markers:
+        refused = wt.sync("--continue")
+        assert refused.returncode == 1
+        assert "conflict markers remain" in refused.stderr
+        assert all(f"{path}:" in refused.stderr for path in kind.markers)
+        assert wt.head() == wt.before
+
+    files = named(kind.keep if resolution == "keep" else kind.delete, wt.main)
+    write(wt.path, files)
+    result = wt.sync("--continue")
+
+    if refused_as_gone(result):
+        return
+    assert result.returncode == 0, result.stderr
+    assert wt.committed("app.py") == greet("hello, both")
+    for path, content in files.items():
+        if content is None:
+            assert path not in wt.tracked()
+        else:
+            assert wt.committed(path) == content
+    wt.assert_merged()
+
+
+@pytest.mark.parametrize("name", KINDS)
+def test_abort_backs_out_of_every_kind_of_conflict(
+    tmp_path: Path, git_env: dict[str, str], name: str
+) -> None:
+    kind = KINDS[name]
+    wt = kind_conflict(tmp_path, git_env, kind)
+    wt.sync("main")
+
+    result = wt.sync("--abort")
+
+    assert result.returncode == 0, result.stderr
+    on_feature = BASE | kind.base | FEATURE_CONFLICT | kind.feature
+    for path, content in on_feature.items():
+        if content is None:
+            assert not (wt.path / path).exists(), path
+        elif not path.startswith(".claude/"):
+            assert wt.read(path) == content, path
+    for path in named(dict.fromkeys(kind.conflicted), wt.main):
+        if path not in on_feature:
+            assert not (wt.path / path).exists(), path
+    wt.assert_unchanged()

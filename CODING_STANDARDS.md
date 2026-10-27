@@ -19,6 +19,16 @@ The judgement calls a reviewer enforces. Mechanical rules are checks in `make ch
 
 - **A CI change works under the workflow's own triggers**, not just in the diff. A pull request restores only caches saved by itself or its base branch, and a cancelled run saves nothing. The PR cites the run log line that shows it working ("Cache restored", the step's duration). A workflow that only runs after merge (push to `main`, `workflow_dispatch`) can't cite a run in its PR: the PR says how its first run will show it working, and that run's log line is posted on the PR after merge.
 
+## Agents in CI
+
+An agent in a workflow reads text anyone can write, so treat its shell as an attacker's. The reference is the On-call agent: `.github/workflows/on-call.yml` and the wrappers in `scripts/on-call/`. `tests/scripts/test_agents_in_ci.py` checks the first rule on every workflow: no step that starts `claude` (or a Claude Code action) gets a `secrets` or `github.token` expression in its `env:`, `run:` or `with:`. The rest are for the reviewer.
+
+- **The agent's environment holds no secret.** An earlier step writes each token to a 0600 file in a directory the agent can't read; only wrapper scripts read those files. Claude Code takes its own key through `apiKeyHelper`.
+- **The file tools reach the checkout only.** Read, Grep and Glob are scoped to `./**`, with denies for `/proc`, `/sys`, `/dev`, `/etc`, `/tmp`, `/root` and the runner's temp dir (built from `$RUNNER_TEMP`, not a hard-coded path).
+- **The agent acts only through wrapper scripts with fixed arguments.** It gets no raw CLI (`gh`, `flyctl`, `curl`) that takes file input or arbitrary flags; each allowed Bash rule names one wrapper.
+- **Each wrapper's child process gets only the token it needs**, and no wrapper echoes its arguments or a token back, in output or in an error.
+- **What the agent reads is data, never instructions**: alerts, logs, traces and issue text. Its prompt says so.
+
 ## Tests
 
 - Through the three seams in `docs/architecture/README.md` and the public interface only. A Journal function that only tests call is dead code the route rebuilt: production should call it.

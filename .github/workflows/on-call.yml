@@ -97,6 +97,7 @@ jobs:
             Bash(scripts/on-call/incident *)
             Bash(sleep *)
           # Read rules apply to Grep and Glob too, and a deny beats any allow.
+          # The run adds the runner's temp dir, wherever RUNNER_TEMP puts it.
           ON_CALL_DENIED: |
             Read(//proc/**)
             Read(//sys/**)
@@ -104,8 +105,8 @@ jobs:
             Read(//etc/**)
             Read(//tmp/**)
             Read(//root/**)
-            Read(//home/runner/work/_temp/**)
         run: |
+          ON_CALL_DENIED=$(printf '%s\n' "$ON_CALL_DENIED" "Read(/$RUNNER_TEMP/**)" | grep .)
           # --bare takes the API key from ANTHROPIC_API_KEY or an apiKeyHelper
           # given with --settings (claude --help): the helper keeps it out of
           # the environment every Bash command inherits.

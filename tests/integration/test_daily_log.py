@@ -176,6 +176,18 @@ def test_the_daily_log_page_shows_signifiers_type_and_time(app_client):
     assert "dentist" in page.text
 
 
+def test_the_quick_entry_box_invites_any_entry_and_explains_every_prefix(app_client):
+    with app_client() as client:
+        daily_log = client.get("/").text
+        monthly_log = client.get("/months/2026-10").text
+
+    assert 'placeholder="Add an entry"' in daily_log
+    assert "for Inspiration" in daily_log
+    # A time is only read after a Prefix, so the hint's example carries one.
+    assert "<code>. 14:00 call</code>" in daily_log
+    assert 'placeholder="Add a task for the month"' in monthly_log
+
+
 def test_the_daily_log_page_shows_its_progress_through_its_tasks(app_client):
     with app_client() as client:
         task = client.post("/api/entries", json={"text": "buy milk"}).json()["id"]

@@ -290,18 +290,34 @@ def _capture_out(capture: journal.Capture) -> CaptureOut:
 SESSION_MAX_AGE = 30 * 24 * 60 * 60
 # The session cookie's key for the logged-in User's id.
 SESSION_USER = "user_id"
+# How far behind the latest time it has read, in whole seconds, the session
+# signer lets the host clock fall before it follows it. See _ClockedSigner.
+SESSION_CLOCK_HOLD = 5
 
 
 class _ClockedSigner(TimestampSigner):
-    """Dates a session cookie by the app's Clock, held from running backwards.
+    """Dates a session cookie by the app's Clock, held through a small step back.
 
     itsdangerous refuses a cookie whose whole-second timestamp is later than
     now. A host clock that steps backwards across a second (WSL2 does, by up to
-    half a second) would make a cookie signed a moment ago look forged. So the
-    signer never reads a time earlier than the latest it has read: through a
-    step back it holds still until the clock catches up. Held, it is never
-    behind the clock, so a session expires no later than by the clock itself,
-    and a cookie dated after any time this process has read is still refused.
+    half a second) would make a cookie signed a moment ago look forged. So
+    through a step back of up to SESSION_CLOCK_HOLD seconds the signer holds
+    still at the latest time it has read, until the clock catches up.
+
+    Beyond that it follows the clock, however far it moved. The hold is only
+    for the small steps a host clock makes on its own: a clock that jumped
+    forward and was then corrected (a bad NTP sync) must not leave the signer
+    on the bad time, signing cookies that a restarted app or another Machine
+    refuses as future-dated, and expiring sessions early. A larger step back
+    likewise follows the clock, and refuses as future-dated the cookies signed
+    in the seconds it stepped back over, as the signer did before it held.
+
+    Five seconds is ten times the largest WSL2 step observed (0.459 s), so the
+    hold covers those with room to spare. It is also the most a bad time can
+    outlive its correction: a forward jump of up to five seconds is held for
+    at most five. Held or not, the signer is never behind the clock, so a
+    session's age is never less than its age by the clock, and a session never
+    lasts longer than SESSION_MAX_AGE by the clock.
     """
 
     def __init__(self, secret_key: str, clock: Clock) -> None:
@@ -310,7 +326,10 @@ class _ClockedSigner(TimestampSigner):
         self._latest = 0
 
     def get_timestamp(self) -> int:
-        self._latest = max(self._latest, int(self._clock().timestamp()))
+        now = int(self._clock().timestamp())
+        stepped_back_a_little = self._latest - SESSION_CLOCK_HOLD <= now < self._latest
+        if not stepped_back_a_little:
+            self._latest = now
         return self._latest
 
 

@@ -67,6 +67,7 @@ When an alert fires, the On-call agent (`.claude/agents/on-call.md`) wakes in Gi
 | `scripts/on-call/fly releases\|status\|secrets\|logs <dev\|prod>` | Fly's release history (with images), Machines, secret names and recent logs |
 | `scripts/on-call/remedy rollback\|flag-off\|raise-pool …` | the three remedies, and nothing else: each checks its arguments and refuses anything outside the remedy |
 | `gh issue list\|view\|create\|comment`, `gh label create incident` | the incident issue |
+| `sleep` | waiting between checks that the signal recovered |
 
 The repo's own Claude settings, hooks and MCP servers don't apply (`--bare --setting-sources user --strict-mcp-config`). Each run keeps the agent's transcript as an artifact.
 

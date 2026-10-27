@@ -84,3 +84,11 @@ Two Grafana Synthetic Monitoring scripted checks run [`monitoring/canary.js`](mo
 ```sh
 scripts/provision-canary
 ```
+
+### On-call agent
+
+When an alert fires, Grafana's webhook sends a `repository_dispatch` event that runs [`.github/workflows/on-call.yml`](.github/workflows/on-call.yml): Claude Code as the On-call agent ([`.claude/agents/on-call.md`](.claude/agents/on-call.md)), which diagnoses from Grafana and Fly, applies one of three remedies through [`scripts/on-call/remedy`](scripts/on-call/remedy) and files an incident issue ([ADR-0002](docs/adr/0002-on-call-agent-in-github-actions.md); [runbook](docs/runbooks/README.md#the-on-call-agent)). To create its tokens, store them as GitHub secrets (and the Viewer-role Grafana token in `.env` for local agents), wire the contact point and notification policy, and send a test notification, run its wizard from `main` once the alerts are imported:
+
+```sh
+scripts/provision-oncall
+```

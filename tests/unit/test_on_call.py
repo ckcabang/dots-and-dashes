@@ -428,6 +428,8 @@ ALLOWED_TOOLS = [
     "Bash(gh issue create *)",
     "Bash(gh issue comment *)",
     "Bash(gh label create incident *)",
+    # Waiting between checks that the alert's signal recovered.
+    "Bash(sleep *)",
 ]
 
 

@@ -75,6 +75,7 @@ jobs:
             Bash(gh issue create *)
             Bash(gh issue comment *)
             Bash(gh label create incident *)
+            Bash(sleep *)
         run: |
           claude --print --bare \
             --agents "$RUNNER_TEMP/on-call/agents.json" --agent on-call \

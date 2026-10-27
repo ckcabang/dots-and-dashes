@@ -243,6 +243,8 @@ with_timeout() {
 create_canary() {
   local app out
   app=$(app_for "$1")
+  # Wake the Machine: dev auto-stops, and flyctl ssh needs a started VM.
+  curl -s -o /dev/null --max-time 90 "https://$app.fly.dev/login" || true
   # Killed after 2 minutes: if flyctl never hands the pipe to the Machine,
   # create-user would wait on stdin forever. The caller then falls back to --pty.
   if out=$(password_for "$1" | with_timeout 120 flyctl ssh console -a "$app" \
@@ -276,6 +278,7 @@ canary_user_stage() {
   if confirm "Create $CANARY_EMAIL on $app?"; then
     if ! create_canary "$env"; then
       warn "That didn't work. Create it by hand instead: the CLI asks for the password."
+      note "If flyctl says no started VMs, open https://$app.fly.dev/login first to wake it."
       step "flyctl ssh console -a $app --pty -C \"/app/.venv/bin/dots-and-dashes create-user --canary --email $CANARY_EMAIL --timezone UTC\""
       pause "Done? Press Enter"
     fi
@@ -380,8 +383,15 @@ copy_file() {
 
 json_field() { python3 -c "import json,sys; print(json.load(sys.stdin)$1)"; }
 
-# dev_has_secret NAME: whether NAME is a Fly secret on dev now.
-dev_has_secret() { flyctl secrets list -a "$DEV_APP" --json 2>/dev/null | grep -q "\"$1\""; }
+# dev_secret_state NAME: "set" or "unset" for a Fly secret on dev now, or
+# "unknown" when the listing itself fails, which must never read as unset.
+dev_secret_state() {
+  local list
+  if ! list=$(flyctl secrets list -a "$DEV_APP" --json 2>/dev/null); then
+    echo unknown; return 0
+  fi
+  if [[ "$list" == *"\"$1\""* ]]; then echo set; else echo unset; fi
+}
 
 # drive_saves: log 30 Entries on dev as its Canary User and delete each saved
 # one. A request that fails, or doesn't answer at all, counts as failed.
@@ -422,12 +432,18 @@ for g in json.load(sys.stdin)["data"]["groups"]:
 # SECRET, drive saves, wait up to 10 minutes for RULE to fire, end it. Refuses
 # to stage over a switch someone already set on dev.
 firing_test() {
-  local secret="$1" value="$2" rule="$3" state="" fired_at=""
-  if dev_has_secret "$secret"; then
+  local secret="$1" value="$2" rule="$3" state="" fired_at="" existing
+  existing=$(dev_secret_state "$secret")
+  if [[ "$existing" == set ]]; then
     warn "$secret is already set on $DEV_APP, perhaps by someone staging an incident."
     warn "Not staging over it. Unset it once that's done, then re-run this wizard:"
     step "flyctl secrets unset -a $DEV_APP $secret"
     EVIDENCE+=("Firing test $secret: not run, $secret was already set on dev")
+    return 0
+  elif [[ "$existing" != unset ]]; then
+    warn "Couldn't list $DEV_APP's secrets, so can't tell whether $secret is set."
+    warn "Not staging blind. Check flyctl works (flyctl secrets list -a $DEV_APP), then re-run."
+    EVIDENCE+=("Firing test $secret: not run, couldn't list dev's secrets; '$rule' unproven")
     return 0
   fi
   STAGED_SECRET="$secret"
@@ -453,7 +469,8 @@ firing_stage() {
   if [[ "$(login_status dev)" != 303 ]]; then
     warn "Dev's Canary User can't log in, so this firing test can't run, and the"
     warn "criterion that '$3' fires stays unproven on the PR."
-    say "Fix dev's Canary User (stage 4's command), then re-run the whole wizard:"
+    say "Fix dev's Canary User (stage 4's command), then re-run the whole wizard."
+    note "If flyctl says no started VMs, open https://$DEV_APP.fly.dev/login first to wake it."
     step "flyctl ssh console -a $DEV_APP --pty -C \"/app/.venv/bin/dots-and-dashes create-user --canary --email $CANARY_EMAIL --timezone UTC\""
     step "scripts/provision-canary"
     note "Re-running is safe: it keeps the Canary Users, checks and imports already done."
@@ -611,6 +628,9 @@ stage "Firing test: save failures on dev"
 say "Sets CHAOS_SAVE_ERROR_RATE=0.5 on $DEV_APP (it restarts), saves 30 Entries"
 say "there as the Canary User, waits for 'Save failures (dev)' to fire, then unsets"
 say "the switch (another restart)."
+note "If a dev canary run lands while half the saves fail, 'Canary failing (dev)' may"
+note "fire too. That's expected: it resolves within about 30 minutes, once its 35m"
+note "window holds only passing runs."
 note "If the wizard stops partway, Ctrl-C included, it unsets the switch on its way out."
 firing_stage CHAOS_SAVE_ERROR_RATE 0.5 "Save failures (dev)"
 

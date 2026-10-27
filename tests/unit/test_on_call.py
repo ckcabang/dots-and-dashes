@@ -301,3 +301,76 @@ def test_grafana_takes_no_method_or_body(grafana):
 
     assert result.returncode != 0
     assert grafana.requests == []
+
+
+def alert(name: str, status: str = "firing") -> dict[str, Any]:
+    """One alert as monitoring/on-call-payload.tmpl puts it in the client_payload."""
+    return {
+        "status": status,
+        "labels": {"alertname": name, "env": "dev", "grafana_folder": "Dots & Dashes"},
+        "annotations": {"image": f"{DEV}:bad", "runbook_url": "https://example.com/runbook"},
+        "startsAt": "2026-10-26T12:00:00Z",
+    }
+
+
+def notification(status: str, *alerts: dict[str, Any]) -> dict[str, Any]:
+    """The repository_dispatch event GitHub hands the On-call workflow."""
+    return {
+        "action": "grafana-alert",
+        "client_payload": {"status": status, "alerts": list(alerts), "commonLabels": {}},
+    }
+
+
+def prepare(tmp_path: Path, event: dict[str, Any]) -> tuple[dict[str, str], Path]:
+    event_path = tmp_path / "event.json"
+    event_path.write_text(json.dumps(event))
+    out = tmp_path / "out"
+    output = tmp_path / "github_output"
+    output.touch()
+    result = subprocess.run(
+        [str(SCRIPTS / "prepare"), str(event_path), str(out)],
+        env={**os.environ, "GITHUB_OUTPUT": str(output)},
+        capture_output=True,
+        text=True,
+        cwd=ROOT,
+    )
+    assert result.returncode == 0, result.stderr
+    outputs = dict(line.split("=", 1) for line in output.read_text().splitlines())
+    return outputs, out
+
+
+def test_a_firing_alert_wakes_the_agent_with_the_notification_in_its_prompt(tmp_path):
+    outputs, out = prepare(tmp_path, notification("firing", alert("Save failures (dev)")))
+
+    assert outputs == {"kind": "firing", "wake": "true"}
+    prompt = (out / "prompt.md").read_text()
+    assert '"alertname": "Save failures (dev)"' in prompt
+    assert f'"image": "{DEV}:bad"' in prompt
+
+
+def test_grafanas_test_notification_starts_a_run_but_wakes_no_agent(tmp_path):
+    """The contact point's Test button sends a TestAlert: it proves the bridge
+    without an incident issue."""
+    outputs, _ = prepare(tmp_path, notification("firing", alert("TestAlert")))
+
+    assert outputs == {"kind": "test", "wake": "false"}
+
+
+def test_a_resolved_notification_wakes_no_agent(tmp_path):
+    outputs, _ = prepare(
+        tmp_path, notification("resolved", alert("Save failures (dev)", status="resolved"))
+    )
+
+    assert outputs == {"kind": "resolved", "wake": "false"}
+
+
+def test_the_agent_runs_as_the_on_call_agent_definition(tmp_path):
+    _, out = prepare(tmp_path, notification("firing", alert("Save latency (dev)")))
+
+    definition = (ROOT / ".claude" / "agents" / "on-call.md").read_text()
+    _, frontmatter, body = definition.split("---\n", 2)
+    (agent,) = json.loads((out / "agents.json").read_text()).values()
+    assert list(json.loads((out / "agents.json").read_text())) == ["on-call"]
+    assert agent["prompt"] == body.strip()
+    assert f"description: {agent['description']}" in frontmatter
+    assert agent["model"] == "opus"

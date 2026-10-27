@@ -77,6 +77,10 @@ class Telemetry:
         resource: Resource | None = None,
     ) -> None:
         resource = resource or Resource.create({"service.name": "dots-and-dashes"})
+        # The deployed image, on every save metric point as well as on the
+        # resource: Grafana Cloud keeps resource attributes off the series, and
+        # an alert names, and the dashboard filters by, the image saving.
+        self.image = str(resource.attributes.get("service.version", "local"))
         self.tracer_provider = TracerProvider(resource=resource)
         if span_exporter is not None:
             self.tracer_provider.add_span_processor(BatchSpanProcessor(span_exporter))
@@ -94,12 +98,13 @@ class Telemetry:
         # latency alerts are written against (docs/runbooks/README.md).
         self.entry_saves = meter.create_counter(
             "entry.saves",
-            description="Entry saves on the key journey, by outcome: saved, refused or failed",
+            description="Entry saves on the key journey, by outcome (saved, refused or "
+            "failed) and image",
         )
         self.entry_save_duration = meter.create_histogram(
             "entry.save.duration",
             unit="s",
-            description="How long an Entry save request took, by outcome",
+            description="How long an Entry save request took, by outcome and image",
             explicit_bucket_boundaries_advisory=SAVE_DURATION_BUCKETS,
         )
 
@@ -315,8 +320,9 @@ class RequestTelemetry:
 
     def _entry_save(self, status: int, seconds: float, error: Exception | None) -> None:
         outcome = "failed" if status >= 500 else "refused" if status >= 400 else "saved"
-        self.telemetry.entry_saves.add(1, {"outcome": outcome})
-        self.telemetry.entry_save_duration.record(seconds, {"outcome": outcome})
+        attributes = {"outcome": outcome, "image": self.telemetry.image}
+        self.telemetry.entry_saves.add(1, attributes)
+        self.telemetry.entry_save_duration.record(seconds, attributes)
         if outcome == "failed":
             self.telemetry.log(
                 SeverityNumber.ERROR,

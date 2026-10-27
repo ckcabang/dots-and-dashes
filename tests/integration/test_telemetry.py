@@ -92,15 +92,17 @@ def test_saving_an_entry_traces_the_request_and_the_database_write(client, signa
 def test_a_saved_entry_is_counted_and_timed_on_the_request_trace(
     client, signals, route, request_args
 ):
+    """Each save is counted by outcome and by the deployed image, so an alert
+    names the image whose saves fail and the dashboard filters by it."""
     response = client.post(route, **request_args)
 
     assert response.status_code == 201
     trace_id = signals.server_span("POST", route).context.trace_id
     points = signals.points()
     (saves,) = points["entry.saves"]
-    assert (dict(saves.attributes), saves.value) == ({"outcome": "saved"}, 1)
+    assert (dict(saves.attributes), saves.value) == ({"outcome": "saved", "image": RELEASE}, 1)
     (duration,) = points["entry.save.duration"]
-    assert dict(duration.attributes) == {"outcome": "saved"}
+    assert dict(duration.attributes) == {"outcome": "saved", "image": RELEASE}
     assert duration.count == 1
     assert 0 < duration.sum < 1
     assert [exemplar.trace_id for exemplar in duration.exemplars] == [trace_id]
@@ -125,7 +127,7 @@ def test_blank_text_is_counted_as_refused_not_failed(client, signals):
 
     assert response.status_code == 422
     (saves,) = signals.points()["entry.saves"]
-    assert (dict(saves.attributes), saves.value) == ({"outcome": "refused"}, 1)
+    assert (dict(saves.attributes), saves.value) == ({"outcome": "refused", "image": RELEASE}, 1)
 
 
 @pytest.fixture
@@ -152,7 +154,7 @@ def test_a_failed_save_is_counted_traced_and_logged(client, signals, entries_ref
     error_type = "sqlalchemy.exc.IntegrityError"
     assert request.attributes and request.attributes["error.type"] == error_type
     (saves,) = signals.points()["entry.saves"]
-    assert (dict(saves.attributes), saves.value) == ({"outcome": "failed"}, 1)
+    assert (dict(saves.attributes), saves.value) == ({"outcome": "failed", "image": RELEASE}, 1)
     (failed,) = [r for r in signals.logs() if r.log_record.body == "Entry save failed"]
     assert failed.log_record.trace_id == request.context.trace_id
     assert dict(failed.log_record.attributes or {}) == {

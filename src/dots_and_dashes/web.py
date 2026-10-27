@@ -1,5 +1,6 @@
 """The Web module: thin FastAPI routes that parse, call the domain, persist and render."""
 
+import time as system_time
 from collections.abc import Callable, Iterator
 from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime, time, timedelta
@@ -31,7 +32,8 @@ templates.env.tests["draggable"] = journal.is_draggable
 
 
 def _system_clock() -> datetime:
-    return datetime.now(UTC)
+    # time.time() is the host's wall clock, which tests step to reproduce a WSL2 host's.
+    return datetime.fromtimestamp(system_time.time(), UTC)
 
 
 class NewEntryIn(BaseModel):

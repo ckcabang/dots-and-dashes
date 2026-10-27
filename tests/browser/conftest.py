@@ -32,12 +32,19 @@ def base_url() -> str:
 
 
 @pytest.fixture(scope="session")
-def create_user():
-    """Create a User in the app's database the way the operator does: with the CLI."""
+def app_database_url() -> str:
+    """The app container's database, reached from the host."""
     test_database = os.environ.get("TEST_DATABASE_URL")
     if not test_database:
         pytest.exit("Set TEST_DATABASE_URL, or run the tests with `make test`")
-    app_database = make_url(test_database).set(database=APP_DATABASE)
+    return make_url(test_database).set(database=APP_DATABASE).render_as_string(
+        hide_password=False
+    )
+
+
+@pytest.fixture(scope="session")
+def create_user(app_database_url):
+    """Create a User in the app's database the way the operator does: with the CLI."""
 
     def create(*, timezone: str = "UTC") -> str:
         # The stack's journal outlives test runs, so each run has a User of its own.
@@ -47,7 +54,7 @@ def create_user():
             + ["--email", email, "--timezone", timezone],
             env={
                 **os.environ,
-                "DATABASE_URL": app_database.render_as_string(hide_password=False),
+                "DATABASE_URL": app_database_url,
                 "USER_PASSWORD": PASSWORD,
             },
             check=True,

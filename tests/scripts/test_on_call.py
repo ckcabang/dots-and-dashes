@@ -2,9 +2,9 @@
 ADR-0002 allows: read telemetry and the Fly release history, and apply one of
 three remedies.
 
-A build check like test_monitoring.py, not a seam: the scripts run in GitHub
-Actions against Fly and Grafana, so these run them against a fake `flyctl`
-and a local HTTP server instead.
+Not a seam (docs/architecture/README.md): the scripts run in GitHub Actions
+against Fly and Grafana, so these run them against a fake `flyctl` and a
+local HTTP server instead.
 """
 
 import json

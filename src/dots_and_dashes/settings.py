@@ -4,6 +4,9 @@ import os
 import secrets
 from dataclasses import dataclass, field
 
+# Each feature flag's environment variable, and the Settings field it sets.
+FLAGS = {"FLAG_MONTHLY_REVIEW": "monthly_review"}
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -27,6 +30,9 @@ class Settings:
     # the share of Entry saves to fail, 0 to 1, and how long to slow each one.
     chaos_save_error_rate: float = 0.0
     chaos_save_latency_ms: int = 0
+    # A feature flag (FLAG_...) to tie the failures to: set, saves fail only
+    # while that flag is on, the way a broken flagged feature would.
+    chaos_save_error_flag: str = ""
     # The most database connections the app holds; unset, SQLAlchemy's default.
     db_pool_size: int | None = None
 
@@ -45,13 +51,25 @@ class Settings:
             release=os.environ.get("FLY_IMAGE_REF", "local"),
             chaos_save_error_rate=_rate("CHAOS_SAVE_ERROR_RATE"),
             chaos_save_latency_ms=_milliseconds("CHAOS_SAVE_LATENCY_MS"),
+            chaos_save_error_flag=_flag_name("CHAOS_SAVE_ERROR_FLAG"),
             db_pool_size=_pool_size("DB_POOL_SIZE"),
             **({"session_secret": session_secret} if session_secret else {}),
         )
 
+    def flag_on(self, name: str) -> bool:
+        """Whether the feature flag set by environment variable `name` is on."""
+        return bool(getattr(self, FLAGS[name]))
+
 
 def _flag(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _flag_name(name: str) -> str:
+    value = os.environ.get(name, "").strip()
+    if value and value not in FLAGS:
+        raise ValueError(f"{name} must name a feature flag ({', '.join(FLAGS)}), not {value!r}")
+    return value
 
 
 def _number[N: (int, float)](name: str, kind: type[N], value: str) -> N:

@@ -41,3 +41,5 @@ GitHub secrets, both set by the provisioning wizards:
 
 - `FLY_PROD_API_TOKEN`: a deploy token for `dots-and-dashes` only; it pushes to prod's repository and deploys.
 - `FLY_API_TOKEN`: dev's deploy token, used only to pull dev's image.
+
+The On-call workflow reads both too, for its remedies on each app ([the On-call agent](README.md#the-on-call-agent)). The agent's rollback deploys the previous release's image directly with `flyctl deploy --image`, rather than through this workflow.

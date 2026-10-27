@@ -1,0 +1,151 @@
+# Wake the On-call agent when a Grafana alert fires (ADR-0002).
+#
+# The bridge: the Grafana contact point "dots-and-dashes-on-call" is a webhook
+# whose custom payload (monitoring/on-call-payload.tmpl) is the body GitHub's
+# repository_dispatch API takes, POSTed to /repos/ckcabang/dots-and-dashes/dispatches
+# with a fine-grained token (Contents: read and write on this repo only) held
+# on the contact point. A notification policy routes the alert rules in folder
+# "Dots & Dashes" to it. scripts/provision-oncall sets all of it up;
+# docs/runbooks/README.md#the-on-call-agent documents it.
+#
+# repository_dispatch always runs main's copy of this file and main's code.
+name: On-call
+run-name: "On-call: ${{ github.event.client_payload.status }} ${{ github.event.client_payload.commonLabels.alertname }}"
+
+on:
+  repository_dispatch:
+    types: [grafana-alert]
+
+# The run's GITHUB_TOKEN reads the code and files the incident issue; nothing else.
+permissions:
+  contents: read
+  issues: write
+
+# One incident at a time: a second notification waits for the first to finish.
+concurrency:
+  group: on-call
+  cancel-in-progress: false
+
+jobs:
+  respond:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      # No token in .git/config: the agent can read the checkout.
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # A firing alert wakes the agent; Grafana's test notification and a
+      # resolved notification only show here.
+      - name: Read the notification
+        id: notification
+        run: scripts/on-call/prepare "$GITHUB_EVENT_PATH" "$RUNNER_TEMP/on-call"
+
+      - name: Install flyctl
+        if: steps.notification.outputs.wake == 'true'
+        uses: superfly/flyctl-actions/setup-flyctl@v1
+
+      - name: Install Claude Code
+        if: steps.notification.outputs.wake == 'true'
+        run: npm install -g @anthropic-ai/claude-code@2.1.311
+
+      # The agent reads text anyone can write (request paths in logs and
+      # traces), so no token is ever in its environment, where its shell could
+      # expand one into an argument. This step writes each to a 0600 file in a
+      # directory the agent's file tools are denied; the scripts in
+      # scripts/on-call/ read only the one they need (on_call_lib.py), and
+      # Claude Code reads its API key through apiKeyHelper.
+      - name: Keep the tokens in files only the scripts read
+        if: steps.notification.outputs.wake == 'true'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # A Viewer-role service account token: Grafana refuses it any write.
+          GRAFANA_VIEWER_TOKEN: ${{ secrets.GRAFANA_VIEWER_TOKEN }}
+          # CD's deploy tokens, each scoped to its own app.
+          FLY_DEV_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FLY_PROD_API_TOKEN: ${{ secrets.FLY_PROD_API_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          umask 077
+          mkdir -p "$RUNNER_TEMP/on-call-tokens"
+          for name in ANTHROPIC_API_KEY GRAFANA_VIEWER_TOKEN FLY_DEV_API_TOKEN FLY_PROD_API_TOKEN GH_TOKEN; do
+            printf '%s' "${!name}" > "$RUNNER_TEMP/on-call-tokens/$name"
+          done
+
+      # Claude Code as the On-call agent (.claude/agents/on-call.md), with the
+      # tools below and no others: it reads Grafana and Fly through
+      # scripts/on-call/grafana and scripts/on-call/fly, applies a remedy only
+      # through scripts/on-call/remedy, and finds, reads and files incident
+      # issues only through scripts/on-call/incident. The file tools reach the
+      # checkout only, never /proc or the token files; each script hands its
+      # child (flyctl or gh) its one token; the incident script takes text
+      # arguments only and refuses any that hold a token.
+      - name: Run the On-call agent
+        if: steps.notification.outputs.wake == 'true'
+        shell: bash
+        env:
+          GRAFANA_URL: ${{ vars.GRAFANA_URL }}
+          ON_CALL_TOKENS: ${{ runner.temp }}/on-call-tokens
+          ON_CALL_TOOLS: |
+            Read(./**)
+            Grep(./**)
+            Glob(./**)
+            Bash(scripts/on-call/grafana *)
+            Bash(scripts/on-call/fly *)
+            Bash(scripts/on-call/remedy *)
+            Bash(scripts/on-call/incident *)
+            Bash(sleep *)
+          # Read rules apply to Grep and Glob too, and a deny beats any allow.
+          ON_CALL_DENIED: |
+            Read(//proc/**)
+            Read(//sys/**)
+            Read(//dev/**)
+            Read(//etc/**)
+            Read(//tmp/**)
+            Read(//root/**)
+            Read(//home/runner/work/_temp/**)
+        run: |
+          # --bare takes the API key from ANTHROPIC_API_KEY or an apiKeyHelper
+          # given with --settings (claude --help): the helper keeps it out of
+          # the environment every Bash command inherits.
+          api_key_helper=$(printf '{"apiKeyHelper": "cat %s/ANTHROPIC_API_KEY"}' "$ON_CALL_TOKENS")
+          claude --print --bare \
+            --settings "$api_key_helper" \
+            --agents "$RUNNER_TEMP/on-call/agents.json" --agent on-call \
+            --tools Read,Grep,Glob,Bash \
+            --allowedTools "$(paste -sd, <<<"$ON_CALL_TOOLS")" \
+            --disallowedTools "$(paste -sd, <<<"$ON_CALL_DENIED")" \
+            --permission-mode dontAsk \
+            --setting-sources user --strict-mcp-config \
+            --max-budget-usd 10 \
+            --output-format stream-json --verbose \
+            < "$RUNNER_TEMP/on-call/prompt.md" | tee "$RUNNER_TEMP/on-call/transcript.jsonl"
+
+      - name: Keep the agent's transcript
+        if: always() && steps.notification.outputs.wake == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: on-call-transcript
+          path: ${{ runner.temp }}/on-call/transcript.jsonl
+          if-no-files-found: ignore
+
+      - name: Remove the token files
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/on-call-tokens"
+
+      - name: Summary
+        if: always()
+        env:
+          KIND: ${{ steps.notification.outputs.kind }}
+        run: |
+          {
+            echo "### On-call"
+            echo
+            case "$KIND" in
+              firing) echo "A firing alert woke the On-call agent: its incident issue is labelled \`incident\`." ;;
+              test) echo "Grafana's test notification arrived: the bridge works. No agent was woken." ;;
+              resolved) echo "A resolved notification arrived. No agent was woken." ;;
+              *) echo "The notification couldn't be read." ;;
+            esac
+          } >> "$GITHUB_STEP_SUMMARY"

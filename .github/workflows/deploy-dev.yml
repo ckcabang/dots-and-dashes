@@ -3,12 +3,23 @@
 # deploys that image to the dev app. The release command (fly.dev.toml) runs
 # the Alembic migrations first. One-time setup is scripts/provision-dev.
 name: Deploy to dev
+run-name: "Deploy ${{ inputs.ref || github.sha }} to dev"
 
 on:
   push:
     branches: [main]
-  # Redeploy main by hand, e.g. after changing a Fly secret.
+  # Redeploy main by hand, e.g. after changing a Fly secret. With a ref, it
+  # builds and deploys that branch, tag or commit instead, with main's copy of
+  # this workflow: how a bad deploy is staged on dev without merging it
+  # (docs/runbooks/README.md#bad-deploy--roll-back). Prod never runs such an
+  # image: deploy-prod.yml refuses a commit that isn't on main.
   workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch, tag or commit to deploy instead of main (stages a bad deploy)
+        required: false
+        default: ""
+        type: string
 
 # One deploy at a time, in merge order; never cancel one mid-release.
 concurrency:
@@ -22,9 +33,14 @@ jobs:
     env:
       # A deploy token scoped to dots-and-dashes-dev.
       FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-      SHA: ${{ github.sha }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+
+      # The image is tagged with the commit it is built from.
+      - name: Name the commit
+        run: echo "SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
 
       - uses: superfly/flyctl-actions/setup-flyctl@v1
 

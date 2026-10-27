@@ -67,6 +67,25 @@ def test_the_error_rate_is_read_from_the_environment_and_fails_that_share_of_sav
     assert counted == {"saved": 6, "failed": 2}
 
 
+@pytest.mark.failed_requests
+def test_saves_tied_to_a_feature_flag_fail_only_while_that_flag_is_on(
+    settings, clock, logged_in, signals, monkeypatch
+):
+    """Stages a broken feature flag: turning the flag off is the remedy, and it
+    clears the failures while the chaos switch stays set."""
+    monkeypatch.setenv("DATABASE_URL", settings.database_url)
+    monkeypatch.setenv("CHAOS_SAVE_ERROR_RATE", "1")
+    monkeypatch.setenv("CHAOS_SAVE_ERROR_FLAG", "FLAG_MONTHLY_REVIEW")
+    statuses = {}
+    for flag in ["on", "off"]:
+        monkeypatch.setenv("FLAG_MONTHLY_REVIEW", flag)
+        app = create_app(clock=clock, telemetry=signals.telemetry)
+        with logged_in(app, raise_server_exceptions=False) as client:
+            statuses[flag] = client.post("/api/entries", json={"text": "buy milk"}).status_code
+
+    assert statuses == {"on": 500, "off": 201}
+
+
 def test_injected_latency_slows_the_save_and_shows_in_its_duration(settings, start, signals):
     with start(replace(settings, chaos_save_latency_ms=300)) as client:
         response = client.post("/api/entries", json={"text": "buy milk"})
@@ -112,6 +131,7 @@ def test_the_pool_size_is_read_from_the_environment_and_a_save_traces_its_checko
         ("CHAOS_SAVE_LATENCY_MS", "-1"),
         ("DB_POOL_SIZE", "x"),
         ("DB_POOL_SIZE", "0"),
+        ("CHAOS_SAVE_ERROR_FLAG", "FLAG_NO_SUCH_FEATURE"),
     ],
 )
 def test_a_bad_switch_value_stops_the_app_starting_and_names_the_switch(

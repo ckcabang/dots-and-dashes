@@ -108,6 +108,8 @@
             ]
           },
           "custom": {
+            "axisSoftMin": 0,
+            "axisSoftMax": 1,
             "thresholdsStyle": {
               "mode": "line"
             }
@@ -131,7 +133,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(rate(entry_saves_total{job=\"$env/dots-and-dashes\", image=~\"$image\", outcome=\"failed\"}[$__rate_interval])) / sum(rate(entry_saves_total{job=\"$env/dots-and-dashes\", image=~\"$image\", outcome=~\"saved|failed\"}[$__rate_interval]))",
+          "expr": "(sum(rate(entry_saves_total{job=\"$env/dots-and-dashes\", image=~\"$image\", outcome=\"failed\"}[$__rate_interval])) or vector(0)) / sum(rate(entry_saves_total{job=\"$env/dots-and-dashes\", image=~\"$image\", outcome=~\"saved|failed\"}[$__rate_interval]))",
           "legendFormat": "failed",
           "range": true,
           "editorMode": "code",
@@ -202,7 +204,7 @@
       "id": 3,
       "type": "timeseries",
       "title": "p95 save latency",
-      "description": "The Save latency alert fires above 1s. Each exemplar links to a save's trace.",
+      "description": "The Save latency alert fires above 1s. Each exemplar's tooltip shows a save's trace_id: open it in Explore → Tempo.",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"

@@ -281,6 +281,20 @@ def test_the_dashboard_shows_saves_by_outcome_p95_with_exemplars_and_canary_pass
     assert 'probe_success{job="dots-and-dashes-canary-$env"}' in canary["expr"]
 
 
+def test_the_save_failure_rate_reads_0_percent_rather_than_no_data_when_nothing_failed():
+    """With no failed saves the failed series is empty, so the panel would show
+    No data; `or vector(0)` makes it 0% on a 0-100% axis."""
+    panel = _panel("Save failure rate")
+    (target,) = panel["targets"]
+    numerator, _, denominator = target["expr"].partition(" / ")
+    assert numerator.startswith("(sum(rate(entry_saves_total{")
+    assert 'outcome="failed"' in numerator
+    assert numerator.endswith(" or vector(0))")
+    assert 'outcome=~"saved|failed"' in denominator
+    custom = panel["fieldConfig"]["defaults"]["custom"]
+    assert (custom["axisSoftMin"], custom["axisSoftMax"]) == (0, 1)
+
+
 CANARY = MONITORING / "canary.js"
 
 

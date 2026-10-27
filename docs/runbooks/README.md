@@ -2,6 +2,7 @@
 
 Contents:
 
+- [Deploy and roll back](deploy.md): dev deploys itself on every merge to `main`; prod deploys and rolls back by hand
 - [Alert: Save failures](#alert-save-failures)
 - [Alert: Save latency](#alert-save-latency)
 - [Alert: Canary failing](#alert-canary-failing)
@@ -29,7 +30,7 @@ The two save alerts read the save metrics, as Grafana Cloud's Prometheus names t
 histogram_quantile(0.95, sum by (le, image) (rate(entry_save_duration_seconds_bucket{job="prod/dots-and-dashes", outcome=~"saved|failed"}[10m])))
 ```
 
-To watch a staged incident on dev, run the same queries with `job="dev/dots-and-dashes"`, or pick `dev` on the dashboard. A failed save's span and its `Entry save failed` log share a trace ID and carry `error.type`; the latency histogram's exemplars link to slow traces.
+To watch a staged incident on dev, run the same queries with `job="dev/dots-and-dashes"`, or pick `dev` on the dashboard. A failed save's span and its `Entry save failed` log share a trace ID and carry `error.type`; the latency histogram's exemplars carry slow saves' trace IDs.
 
 Every notification carries the environment, the image, a link to the dashboard filtered to both, the alert's panel (Grafana's own panel link) and this runbook's section for it.
 
@@ -41,7 +42,7 @@ Every notification carries the environment, the image, a link to the dashboard f
 ## Alert: Save latency
 
 - **Means**: the p95 Entry save took over 1s over the last 10 minutes.
-- **First look**: an exemplar on the **p95 save latency** panel opens a slow save's trace. Time in a long `db.connection.checkout` span is an [exhausted pool](#db-connection-pool-exhausted--raise-the-pool-size-and-redeploy).
+- **First look**: an exemplar on the **p95 save latency** panel shows a slow save's `trace_id` in its tooltip; open that trace in Explore → Tempo (the tooltip has no link to it yet, #104). Time in a long `db.connection.checkout` span is an [exhausted pool](#db-connection-pool-exhausted--raise-the-pool-size-and-redeploy).
 
 ## Alert: Canary failing
 
@@ -52,6 +53,8 @@ Every notification carries the environment, the image, a link to the dashboard f
 ## The On-call agent
 
 When an alert fires, the On-call agent (its prompt is `scripts/on-call/agent.md`) wakes in GitHub Actions, diagnoses from telemetry and applies only the three remedies below (ADR-0002). Anything else goes to the human through an incident issue labelled `ready-for-human`. `scripts/provision-oncall` sets up everything in this section and prints the evidence, read back from each service.
+
+**The workflow is disabled now**, to save Claude API cost (`gh workflow disable on-call.yml`, after the live run in #80). Alerts still fire and Grafana still sends each notification, but GitHub starts no run for a disabled workflow, so no agent wakes: follow the alert's section above by hand, and apply its remedy with **Deploy to prod** (a rollback) or `flyctl secrets set` (a flag off, a bigger pool). Re-enable it with `gh workflow enable on-call.yml`; `gh workflow list --all` shows its state. The incident issues from its last live run, #91, #93 and #94, show it waking on each alert and clearing it.
 
 **The bridge: a custom payload on the contact point.** GitHub's `repository_dispatch` API takes `{"event_type", "client_payload"}` and a token; Grafana's webhook sends its own shape. So the Grafana contact point `dots-and-dashes-on-call` is a webhook whose custom payload, `monitoring/on-call-payload.tmpl`, rewrites each notification into that body, and it POSTs it straight to `https://api.github.com/repos/ckcabang/dots-and-dashes/dispatches`. Nothing else is hosted. The event type is `grafana-alert`, which starts `.github/workflows/on-call.yml`; `client_payload` holds the notification's status, labels, annotations (`environment`, `image`, `dashboard_url`, `runbook_url`) and each alert.
 

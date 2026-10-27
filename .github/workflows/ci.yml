@@ -65,6 +65,13 @@ jobs:
       # the test stack `make check` left running, as a Canary User of its own.
       # The project name and port lookup are the Makefile's TEST_PROJECT and
       # test_port: keep them in step.
+      #
+      # Each run logs the way Synthetic Monitoring's does, whose logs anyone
+      # who reads the stack's Loki can read: logfmt at debug level
+      # (grafana/synthetic-monitoring-agent, internal/k6runner/local.go). No log
+      # may hold the session cookie or the password (issue #98). With HTTP
+      # debug logging on, which dumps every request's and response's headers,
+      # the canary must refuse to log in and fail its run.
       - name: Run the canary once against the test stack
         run: |
           export COMPOSE_PROJECT_NAME="dots-and-dashes-test-$(printf '%s' "$PWD" | cksum | cut -d' ' -f1)"
@@ -76,9 +83,33 @@ jobs:
             --password-env CANARY_PASSWORD
           secrets="$RUNNER_TEMP/canary.secrets"
           (umask 077 && printf 'canary-password=%s\n' "$CANARY_PASSWORD" > "$secrets")
-          k6 run --secret-source="file=$secrets" \
-            -e BASE_URL="http://localhost:$(docker compose port app 8000 | sed 's/.*://')" \
-            monitoring/canary.js
+          base_url="http://localhost:$(docker compose port app 8000 | sed 's/.*://')"
+          canary() {
+            k6 run --secret-source="file=$secrets" -e BASE_URL="$base_url" \
+              --log-format logfmt --log-output "file=$RUNNER_TEMP/$1" --verbose --no-color \
+              "${@:2}" monitoring/canary.js
+          }
+          # Never prints a matching line: CI's own logs are public. A missing
+          # or empty log counts as a leak, since nothing in it was checked.
+          leaks() {
+            test -s "$RUNNER_TEMP/$1" || return 0
+            grep -q -i -E 'cookie:|session=' "$RUNNER_TEMP/$1" ||
+              grep -q -F "$CANARY_PASSWORD" "$RUNNER_TEMP/$1"
+          }
+          canary canary.log
+          if leaks canary.log; then
+            echo "::error::The canary's log is missing, or holds a session cookie or the password."
+            exit 1
+          fi
+          if canary canary-http-debug.log --http-debug=full; then
+            echo "::error::The canary passed with HTTP debug logging on: it must refuse to log in."
+            exit 1
+          fi
+          if leaks canary-http-debug.log; then
+            echo "::error::With HTTP debug logging on, the canary's log is missing, or holds a session cookie or the password."
+            exit 1
+          fi
+          grep -q 'refusing to log in' "$RUNNER_TEMP/canary-http-debug.log"
 
       - name: Show test stack logs
         if: failure()

@@ -355,6 +355,11 @@ check_stage() {
     step "  const ENVIRONMENT = __ENV.CANARY_ENV || 'prod';  changed to end in 'dev';"
   fi
   rm -f "$script"
+  note "Its logs must never hold the session cookie (issue #98). After its next run,"
+  note "Explore → your Loki data source → code mode, last 15 minutes:"
+  note "  sum(count_over_time({job=\"$job\"} |~ \"(?i)cookie:\" [15m]))  shows no data."
+  note "If the run fails with 'HTTP debug logging is on', the canary refused to log"
+  note "in because something turned on k6's HTTP debug logging: say so on the PR."
   if [[ "$kept" == no ]]; then
     ask "$key" "The check's ID (the number at the end of its page's URL, /checks/<id>):"
   fi

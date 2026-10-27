@@ -20,9 +20,19 @@
 //
 // The Entry's text is fixed and says nothing; nothing here logs a request or
 // response body, and the app keeps Entry text out of its own telemetry.
+//
+// Synthetic Monitoring's check logs go to the stack's Loki, which the agents'
+// Viewer token reads. k6 keeps the password out of them: it redacts a secret's
+// value from every log line. It can't do that for the session cookie the app
+// answers the log in with, and HTTP debug logging (k6's --http-debug, or
+// K6_HTTP_DEBUG) logs it in every request's and response's headers, so with
+// that on the canary refuses to log in and fails the run (issue #98). The
+// script's own options can't turn it off: a flag or environment variable
+// overrides them.
 
 import http from 'k6/http';
 import { check, fail } from 'k6';
+import exec from 'k6/execution';
 import secrets from 'k6/secrets';
 
 // The check's environment: the one line that differs between the two checks.
@@ -60,6 +70,11 @@ function named(name, params = {}) {
 }
 
 export default async function () {
+  const httpDebug = exec.test.options.httpDebug;
+  if (!check(httpDebug, { 'HTTP debug logging is off': (d) => !d })) {
+    fail(`HTTP debug logging is on (${httpDebug}): refusing to log in, as it would log the session cookie`);
+  }
+
   const password = await secrets.get(TARGET.secret);
 
   const login = http.post(

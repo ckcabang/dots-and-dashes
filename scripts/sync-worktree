@@ -21,6 +21,7 @@ cd "$(git rev-parse --show-toplevel)"
 # A pending merge is a directory: target, head, tree and branch hold one line
 # each, message the whole message, conflicted the conflicted paths, and
 # untracked the NUL-separated untracked files from before the merge started.
+# written appears once the merged files are in the worktree.
 state=$(git rev-parse --git-path sync-worktree-merge)
 
 skip_claude() { git ls-files -z .claude | xargs -0 -r git update-index --skip-worktree; }
@@ -44,7 +45,7 @@ if [[ ${1:-} == --abort ]]; then
     # back from it, and the ones it added go.
     git reset -q --mixed "$head"
     skip_claude
-    git diff -z --name-only -- . ':!.claude' | xargs -0 -r git checkout --
+    git diff -z --name-only -- . ':!.claude' | xargs -0 -r git --literal-pathspecs checkout --
     git diff -z --name-only --no-renames --diff-filter=A "$head" "$tree" -- . ':!.claude' \
         | xargs -0 -r rm -f --
     rm -rf "$state"
@@ -57,8 +58,12 @@ if [[ ${1:-} == --continue ]]; then
         echo "sync-worktree: HEAD moved since the merge started; expected $head." >&2
         exit 1
     }
+    [[ -f $state/written ]] || {
+        echo "sync-worktree: the merge stopped before writing its files; run --abort, then start it again." >&2
+        exit 1
+    }
     mapfile -t files < "$state/conflicted"
-    if git grep --no-index -nE '^(<<<<<<<|>>>>>>>)( |$)' -- "${files[@]}" >&2; then
+    if git --literal-pathspecs grep --no-index -nE '^(<<<<<<<|>>>>>>>)( |$)' -- "${files[@]}" >&2; then
         echo "sync-worktree: conflict markers remain; resolve them, then re-run --continue." >&2
         exit 1
     fi
@@ -124,7 +129,7 @@ if (( ${#added[@]} )); then
     if [[ -n $clobbered ]]; then
         echo "sync-worktree: merging $branch would overwrite these untracked files; move" >&2
         echo "or remove them first. Nothing changed." >&2
-        printf '  %s\n' "$clobbered" >&2
+        sed 's/^/  /' <<< "$clobbered" >&2
         exit 1
     fi
 fi
@@ -149,12 +154,14 @@ else
     git reset -q --mixed "$(git commit-tree "$tree" -p HEAD -p "$target" -m "$message")"
 fi
 skip_claude
-git diff --name-only --diff-filter=d "$before" "$tree" -- . ':!.claude' \
-    | xargs -r git checkout --
-git diff --name-only --diff-filter=D "$before" "$tree" -- . ':!.claude' \
-    | xargs -r rm -f --
+git diff -z --name-only --no-renames --diff-filter=d "$before" "$tree" -- . ':!.claude' \
+    | xargs -0 -r git --literal-pathspecs checkout --
+git diff -z --name-only --no-renames --diff-filter=D "$before" "$tree" -- . ':!.claude' \
+    | xargs -0 -r rm -f --
 
 if (( ${#conflicted[@]} )); then
+    # Only now may --continue commit what's in the worktree.
+    touch "$state/written"
     echo "sync-worktree: merging $branch conflicts. Resolve these files, then run" >&2
     echo "scripts/sync-worktree --continue, or back out with --abort:" >&2
     printf '  %s\n' "${conflicted[@]}" >&2

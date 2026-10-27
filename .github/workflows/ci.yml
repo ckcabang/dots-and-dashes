@@ -89,14 +89,16 @@ jobs:
               --log-format logfmt --log-output "file=$RUNNER_TEMP/$1" --verbose --no-color \
               "${@:2}" monitoring/canary.js
           }
-          # Never prints a matching line: CI's own logs are public.
+          # Never prints a matching line: CI's own logs are public. A missing
+          # or empty log counts as a leak, since nothing in it was checked.
           leaks() {
+            test -s "$RUNNER_TEMP/$1" || return 0
             grep -q -i -E 'cookie:|session=' "$RUNNER_TEMP/$1" ||
               grep -q -F "$CANARY_PASSWORD" "$RUNNER_TEMP/$1"
           }
           canary canary.log
           if leaks canary.log; then
-            echo "::error::The canary's log holds a session cookie or the password."
+            echo "::error::The canary's log is missing, or holds a session cookie or the password."
             exit 1
           fi
           if canary canary-http-debug.log --http-debug=full; then
@@ -104,7 +106,7 @@ jobs:
             exit 1
           fi
           if leaks canary-http-debug.log; then
-            echo "::error::With HTTP debug logging on, the canary's log holds a session cookie or the password."
+            echo "::error::With HTTP debug logging on, the canary's log is missing, or holds a session cookie or the password."
             exit 1
           fi
           grep -q 'refusing to log in' "$RUNNER_TEMP/canary-http-debug.log"

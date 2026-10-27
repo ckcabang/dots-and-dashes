@@ -547,3 +547,36 @@ def test_continue_finishes_a_rename_rename_conflict(
     assert "b.txt" not in wt.tracked()
     assert "f.txt" not in wt.tracked()
     wt.assert_merged()
+
+
+def test_continue_refuses_markers_in_a_conflicted_file_moved_to_a_new_name(
+    tmp_path: Path, git_env: dict[str, str]
+) -> None:
+    wt = conflicted(tmp_path, git_env)
+    wt.sync("main")
+    (wt.path / "app.py").rename(wt.path / "app2.py")
+
+    refused = wt.sync("--continue")
+
+    assert refused.returncode == 1
+    assert "conflict markers remain" in refused.stderr
+    assert refused.stderr.startswith("app2.py:2:<<<<<<< ")
+    assert wt.head() == wt.before
+    assert wt.pending()
+
+
+def test_continue_commits_a_resolved_file_moved_to_a_new_name(
+    tmp_path: Path, git_env: dict[str, str]
+) -> None:
+    # scratch.txt was untracked before the merge, so it's neither checked nor committed.
+    wt = conflicted(tmp_path, git_env, untracked={"scratch.txt": MARKERS + "\n"})
+    wt.sync("main")
+    write(wt.path, {"app.py": None, "app2.py": greet("hello, both")})
+
+    result = wt.sync("--continue")
+
+    assert result.returncode == 0, result.stderr
+    assert wt.committed("app2.py") == greet("hello, both")
+    assert "app.py" not in wt.tracked()
+    assert "scratch.txt" not in wt.tracked()
+    wt.assert_merged(status="?? scratch.txt")

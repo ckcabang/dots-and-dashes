@@ -31,8 +31,12 @@ class SaveChaos:
 
     @classmethod
     def from_settings(cls, settings: Settings) -> "SaveChaos":
+        """Tied to a feature flag that is off, no save fails: turning a broken
+        flag off is its remedy (docs/runbooks)."""
+        flag = settings.chaos_save_error_flag
+        flag_off = bool(flag) and not settings.flag_on(flag)
         return cls(
-            error_rate=settings.chaos_save_error_rate,
+            error_rate=0.0 if flag_off else settings.chaos_save_error_rate,
             latency_ms=settings.chaos_save_latency_ms,
         )
 

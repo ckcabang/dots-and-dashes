@@ -5,6 +5,7 @@ Contents:
 - [Alert: Save failures](#alert-save-failures)
 - [Alert: Save latency](#alert-save-latency)
 - [Alert: Canary failing](#alert-canary-failing)
+- [The On-call agent](#the-on-call-agent): how an alert wakes it, its tokens and the tools it may use
 - [Staging an incident](#staging-an-incident)
 - [Bad deploy → roll back](#bad-deploy--roll-back)
 - [Broken feature flag → turn it off](#broken-feature-flag--turn-it-off)
@@ -48,9 +49,37 @@ Every notification carries the environment, the image, a link to the dashboard f
 - **First look**: the check's logs in Synthetic Monitoring name the step and status that failed. A failed save also shows on the save alerts. A 401 on the save, or a log in that isn't 303, means the Canary User's login broke: its password must match its Synthetic Monitoring secret, `canary-password` on prod or `canary-password-dev` on dev (`scripts/provision-canary`). On dev, a run that times out may just be a cold start, since dev stops when idle. The check's timeout is 120s to cover one. The probe can't know the image, so the rule joins its pass rate with the images the app's save metrics carried over the same window. That gives one notification per image serving the environment, or one naming no image when the app saved nothing (the app is down).
 - **Budget**: at one probe location the two checks use about 46k of the free tier's 100k test executions a month (prod every minute, about 43,200; dev every 15 minutes, about 2,900). Each extra probe location multiplies that, so keep one.
 
-The On-call agent (`.claude/agents/on-call.md`) applies only the three remedies below (ADR-0002). Anything else goes to the human through an incident issue labelled `ready-for-human`.
+## The On-call agent
 
-Stage each scenario on dev with the chaos switch or the flag and pool settings below. The incident issues the agent files are the evidence it works.
+When an alert fires, the On-call agent (`.claude/agents/on-call.md`) wakes in GitHub Actions, diagnoses from telemetry and applies only the three remedies below (ADR-0002). Anything else goes to the human through an incident issue labelled `ready-for-human`. `scripts/provision-oncall` sets up everything in this section and prints the evidence, read back from each service.
+
+**The bridge: a custom payload on the contact point.** GitHub's `repository_dispatch` API takes `{"event_type", "client_payload"}` and a token; Grafana's webhook sends its own shape. So the Grafana contact point `dots-and-dashes-on-call` is a webhook whose custom payload, `monitoring/on-call-payload.tmpl`, rewrites each notification into that body, and it POSTs it straight to `https://api.github.com/repos/ckcabang/dots-and-dashes/dispatches`. Nothing else is hosted. The event type is `grafana-alert`, which starts `.github/workflows/on-call.yml`; `client_payload` holds the notification's status, labels, annotations (`environment`, `image`, `dashboard_url`, `runbook_url`) and each alert.
+
+- **The trigger's GitHub token**, `dots-and-dashes-on-call-dispatch`, is a fine-grained personal access token for this repository only, with **Contents: read and write**, the least that can send `repository_dispatch`. It is stored only on the contact point, as its `Authorization` header's credentials (`authorization_scheme` Bearer), a secure field Grafana never shows again. It can also push code, so give it an expiry and rotate it by re-running the wizard.
+- **The route**: a notification policy sends every alert in folder **Dots & Dashes** (`grafana_folder="Dots & Dashes"`, uid `dots-and-dashes`) to the contact point, grouped by `alertname` and `env`.
+- **Test notification**: the contact point's **Test** sends Grafana's `TestAlert`. It starts an On-call run that wakes no agent and says so in its summary: the proof the bridge works.
+
+**What the workflow gives the agent.** Its `GITHUB_TOKEN` has `contents: read` and `issues: write` and nothing else. Claude Code runs with the agent definition as its only agent, the built-in tools `Read`, `Grep`, `Glob` and `Bash` only, and `--permission-mode dontAsk`, so a command outside these allow rules is refused, never asked about:
+
+| Allowed | For |
+|---|---|
+| `scripts/on-call/grafana <api path>` | GET-only reads of Grafana's HTTP API with the Viewer token: alert rules and states, and Prometheus, Loki and Tempo through the data source proxy |
+| `scripts/on-call/fly releases\|status\|secrets\|logs <dev\|prod>` | Fly's release history (with images), Machines, secret names and recent logs |
+| `scripts/on-call/remedy rollback\|flag-off\|raise-pool …` | the three remedies, and nothing else: each checks its arguments and refuses anything outside the remedy |
+| `gh issue list\|view\|create\|comment`, `gh label create incident` | the incident issue |
+
+The repo's own Claude settings, hooks and MCP servers don't apply (`--bare --setting-sources user --strict-mcp-config`). Each run keeps the agent's transcript as an artifact.
+
+**Secrets and variables** the workflow reads, all set by `scripts/provision-oncall`:
+
+- `ANTHROPIC_API_KEY` (secret): the Claude API key Claude Code runs with.
+- `GRAFANA_URL` (variable): the Grafana Cloud stack's URL.
+- `GRAFANA_VIEWER_TOKEN` (secret): a token of the Viewer-role service account `dots-and-dashes-agents`. Grafana answers it 200 to a read and 403 to any write. The wizard also writes it, with `GRAFANA_URL`, to the gitignored `.env`, where `scripts/on-call/grafana` finds it, so a local agent (a Reviewer checking rules, Synthetic Monitoring checks or alert states) reads Grafana without asking the human for screenshots.
+- `FLY_API_TOKEN` and `FLY_PROD_API_TOKEN` (secrets): CD's deploy tokens, scoped to `dots-and-dashes-dev` and `dots-and-dashes` ([deploy.md](deploy.md#secrets-it-needs)). A deploy token can deploy its app and set its secrets, which is all the remedies do; `scripts/on-call/remedy` hands each command only its own environment's token.
+
+**Diagnosing locally**: with `.env` filled by the wizard, the same read tools work from a checkout, e.g. `scripts/on-call/grafana 'api/prometheus/grafana/api/v1/rules'`. The Fly ones use your own `flyctl` login.
+
+Stage each scenario on dev as its section below says. The incident issues the agent files are the evidence it works.
 
 ## Staging an incident
 
@@ -66,27 +95,58 @@ The 10-minute windows keep the saves counted for 10 minutes after the run.
 
 - **`CHAOS_SAVE_ERROR_RATE`**: the share of Entry saves to fail, from 0 to 1. The failures are spread evenly, not drawn at random: `0.25` fails exactly every fourth save on each Machine. The failure alert fires above 5%, so stage it with more than `0.05`. A failed save answers 500, counts as `outcome="failed"`, and its span and `Entry save failed` log carry `error.type="dots_and_dashes.chaos.InjectedSaveFailure"`.
 - **`CHAOS_SAVE_LATENCY_MS`**: milliseconds to slow every Entry save by, while it holds its database connection. It shows in `entry.save.duration` and as the time between the save's checkout and its first statement.
-- **`DB_POOL_SIZE`**: the most database connections each Machine holds. Unset, SQLAlchemy's default applies: 5, plus 10 overflow. Set, it is the hard limit, with no overflow, so `DB_POOL_SIZE=1` with `CHAOS_SAVE_LATENCY_MS=2000` and a few saves at once exhausts the pool.
+- **`DB_POOL_SIZE`**: the most database connections each Machine holds. Unset, SQLAlchemy's default applies: 5, plus 10 overflow. Set, it is the hard limit, with no overflow, so `DB_POOL_SIZE=1` with `CHAOS_SAVE_LATENCY_MS=600` and a few saves at once exhausts the pool.
+- **`CHAOS_SAVE_ERROR_FLAG`**: a feature flag, such as `FLAG_MONTHLY_REVIEW`, to tie `CHAOS_SAVE_ERROR_RATE` to: set, saves fail only while that flag is on, the way a broken flagged feature would. Any other value stops the app starting.
 
 Every wait for a pooled connection is a `db.connection.checkout` span under the request's span. It carries `db.client.connection.max`, the most connections the app may hold, and `db.client.connection.used`, how many it held when the checkout began.
 
 ## Bad deploy → roll back
 
-- **Signs**: save failures start right after a release; the errors' traces point at code that changed in it.
-- **Remedy**: redeploy the previous image tag: run **Deploy to prod** with the version before the bad one ([deploy.md](deploy.md#roll-back)).
+- **Signs**: save failures start right after a release, on the image the alert names; `scripts/on-call/fly releases <env>` shows that image arriving at the release before the failures began, and the errors' traces point at code that changed in it.
+- **Remedy**: deploy the image of the release before it. The agent runs `scripts/on-call/remedy rollback <env> --from <the alert's image>`: it reads the release history, refuses unless the app still runs that image (so a second run never rolls forward onto the bad one), skips failed releases and ones of the same image (a secrets change), and deploys the one before with `flyctl deploy --image`. A human can do the same on prod with **Deploy to prod** and the version before the bad one ([deploy.md](deploy.md#roll-back)). A rollback restores the image only: Fly secrets stay as they are, so a bad secret or flag is not undone by it.
 - **Cleared when**: the failure rate falls back under the threshold.
+- **Stage it on dev** with a broken build, not a chaos secret: a secret would survive the rollback. Build one on a branch, never merged, and deploy it with `deploy-dev.yml`'s `ref` input, which builds that branch with main's copy of the workflow. Prod can never get it: Deploy to prod refuses a commit that isn't on `main`.
+
+  ```sh
+  git switch -c stage/bad-deploy origin/main
+  # Every Entry save now violates the NOT NULL on entries.position.
+  sed -i 's/user_id=_user_id(session), position=0)/user_id=_user_id(session), position=None)/' src/dots_and_dashes/persistence.py
+  git commit -am "Stage a bad deploy on dev (never merge)"
+  git push origin stage/bad-deploy
+  gh workflow run deploy-dev.yml -f ref=stage/bad-deploy
+  ```
+
+  Once the run has deployed it, drive saves with k6 (above). Every save answers 500 with `error.type="sqlalchemy.exc.IntegrityError"`, and **Save failures (dev)** fires naming the bad image. The agent rolls dev back with `scripts/on-call/remedy rollback dev --from registry.fly.io/dots-and-dashes-dev:<the bad commit>`. Afterwards delete the branch (`git push origin --delete stage/bad-deploy`); the next merge to `main` deploys `main` as usual.
 
 ## Broken feature flag → turn it off
 
-- **Signs**: errors only come from requests with the flag on (for example `FLAG_MONTHLY_REVIEW`).
-- **Remedy**: set the flag off as a Fly secret, which restarts the app.
+- **Signs**: errors only come with the flag on (for example `FLAG_MONTHLY_REVIEW`): they begin at a release that changed secrets but not the image (`scripts/on-call/fly releases <env>` shows the same image as before it), and `scripts/on-call/fly secrets <env>` lists the flag.
+- **Remedy**: set the flag off as a Fly secret, which restarts the app. The agent runs `scripts/on-call/remedy flag-off <env> FLAG_MONTHLY_REVIEW`; it refuses any name that isn't one of the app's feature flags (`FLAGS` in `settings.py`). With a flag off the app behaves exactly as before the flag (`CODING_STANDARDS.md`), so this is always safe.
 - **Cleared when**: the flagged requests' errors stop.
+- **Stage it on dev** with the chaos switch tied to the flag, so the failures come only with the flag on and turning the flag off clears them while the chaos secrets stay:
+
+  ```sh
+  flyctl secrets set -a dots-and-dashes-dev FLAG_MONTHLY_REVIEW=off
+  flyctl secrets set -a dots-and-dashes-dev CHAOS_SAVE_ERROR_RATE=0.5 CHAOS_SAVE_ERROR_FLAG=FLAG_MONTHLY_REVIEW
+  # Saves still succeed. Now the release that turns the flag on starts the failures:
+  flyctl secrets set -a dots-and-dashes-dev FLAG_MONTHLY_REVIEW=on
+  ```
+
+  Drive saves with k6: half fail, and **Save failures (dev)** fires. The agent runs `scripts/on-call/remedy flag-off dev FLAG_MONTHLY_REVIEW`. Afterwards end it: `flyctl secrets unset -a dots-and-dashes-dev CHAOS_SAVE_ERROR_RATE CHAOS_SAVE_ERROR_FLAG`, then `flyctl secrets set -a dots-and-dashes-dev FLAG_MONTHLY_REVIEW=on` to put the flag back.
 
 ## DB connection pool exhausted → raise the pool size and redeploy
 
 - **Signs**: save latency climbs while the database itself is healthy. In a slow save's trace, the time goes to a long `db.connection.checkout` span whose `db.client.connection.used` equals its `db.client.connection.max`: every connection was in use, so the save waited for one. The statements after it are fast. A checkout that waits out the pool's 30s timeout fails with `error.type="sqlalchemy.exc.TimeoutError"`.
-- **Remedy**: set `DB_POOL_SIZE` as a Fly secret, above the `db.client.connection.max` on the long checkout span, and redeploy. Unset, that maximum is already 15 (5 plus 10 overflow), so a smaller `DB_POOL_SIZE` lowers the limit and makes the exhaustion worse. Keep `DB_POOL_SIZE` times the number of Machines under Postgres's `max_connections` (100 by default), less a few for migrations and `psql`.
+- **Remedy**: set `DB_POOL_SIZE` as a Fly secret, above the `db.client.connection.max` on the long checkout span, and redeploy. Unset, that maximum is already 15 (5 plus 10 overflow), so a smaller `DB_POOL_SIZE` lowers the limit and makes the exhaustion worse. Keep `DB_POOL_SIZE` times the number of Machines under Postgres's `max_connections` (100 by default), less a few for migrations and `psql`. The agent runs `scripts/on-call/remedy raise-pool <env> <size> --above <db.client.connection.max>`: it refuses a size that isn't above that maximum, or is over 40. Setting the secret makes a new release, so Fly redeploys every Machine with the new size.
 - **Cleared when**: p95 save latency falls back under 1s.
+- **Stage it on dev** with one connection and slow saves. Each save is held 600ms, under the 1s threshold on its own, so only the queue for the one connection pushes p95 over:
+
+  ```sh
+  flyctl secrets set -a dots-and-dashes-dev DB_POOL_SIZE=1 CHAOS_SAVE_LATENCY_MS=600
+  k6 run --vus 5 -i 100 --secret-source=file=canary.secrets -e CANARY_ENV=dev monitoring/canary.js
+  ```
+
+  **Save latency (dev)** fires, and a slow save's trace shows a long checkout with `db.client.connection.used` = `db.client.connection.max` = 1. The agent runs `scripts/on-call/remedy raise-pool dev 10 --above 1`; with ten connections each save takes about 600ms and p95 falls under 1s. Afterwards: `flyctl secrets unset -a dots-and-dashes-dev DB_POOL_SIZE CHAOS_SAVE_LATENCY_MS`.
 
 ## Running costs
 

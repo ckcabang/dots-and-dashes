@@ -1,0 +1,111 @@
+# Wake the On-call agent when a Grafana alert fires (ADR-0002).
+#
+# The bridge: the Grafana contact point "dots-and-dashes-on-call" is a webhook
+# whose custom payload (monitoring/on-call-payload.tmpl) is the body GitHub's
+# repository_dispatch API takes, POSTed to /repos/ckcabang/dots-and-dashes/dispatches
+# with a fine-grained token (Contents: read and write on this repo only) held
+# on the contact point. A notification policy routes the alert rules in folder
+# "Dots & Dashes" to it. scripts/provision-oncall sets all of it up;
+# docs/runbooks/README.md#the-on-call-agent documents it.
+#
+# repository_dispatch always runs main's copy of this file and main's code.
+name: On-call
+run-name: "On-call: ${{ github.event.client_payload.status }} ${{ github.event.client_payload.commonLabels.alertname }}"
+
+on:
+  repository_dispatch:
+    types: [grafana-alert]
+
+# The run's GITHUB_TOKEN reads the code and files the incident issue; nothing else.
+permissions:
+  contents: read
+  issues: write
+
+# One incident at a time: a second notification waits for the first to finish.
+concurrency:
+  group: on-call
+  cancel-in-progress: false
+
+jobs:
+  respond:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      # A firing alert wakes the agent; Grafana's test notification and a
+      # resolved notification only show here.
+      - name: Read the notification
+        id: notification
+        run: scripts/on-call/prepare "$GITHUB_EVENT_PATH" "$RUNNER_TEMP/on-call"
+
+      - name: Install flyctl
+        if: steps.notification.outputs.wake == 'true'
+        uses: superfly/flyctl-actions/setup-flyctl@v1
+
+      - name: Install Claude Code
+        if: steps.notification.outputs.wake == 'true'
+        run: npm install -g @anthropic-ai/claude-code@2.1.311
+
+      # Claude Code as the On-call agent (.claude/agents/on-call.md), with the
+      # tools below and no others: it reads Grafana and Fly through
+      # scripts/on-call/grafana and scripts/on-call/fly, applies a remedy only
+      # through scripts/on-call/remedy, and files the incident issue with gh.
+      - name: Run the On-call agent
+        if: steps.notification.outputs.wake == 'true'
+        shell: bash
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GRAFANA_URL: ${{ vars.GRAFANA_URL }}
+          # A Viewer-role service account token: Grafana refuses it any write.
+          GRAFANA_VIEWER_TOKEN: ${{ secrets.GRAFANA_VIEWER_TOKEN }}
+          # CD's deploy tokens, each scoped to its own app.
+          FLY_DEV_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FLY_PROD_API_TOKEN: ${{ secrets.FLY_PROD_API_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          ON_CALL_TOOLS: |
+            Read
+            Grep
+            Glob
+            Bash(scripts/on-call/grafana *)
+            Bash(scripts/on-call/fly *)
+            Bash(scripts/on-call/remedy *)
+            Bash(gh issue list *)
+            Bash(gh issue view *)
+            Bash(gh issue create *)
+            Bash(gh issue comment *)
+            Bash(gh label create incident *)
+        run: |
+          claude --print --bare \
+            --agents "$RUNNER_TEMP/on-call/agents.json" --agent on-call \
+            --tools Read,Grep,Glob,Bash \
+            --allowedTools "$(paste -sd, <<<"$ON_CALL_TOOLS")" \
+            --permission-mode dontAsk \
+            --setting-sources user --strict-mcp-config \
+            --max-budget-usd 10 \
+            --output-format stream-json --verbose \
+            < "$RUNNER_TEMP/on-call/prompt.md" | tee "$RUNNER_TEMP/on-call/transcript.jsonl"
+
+      - name: Keep the agent's transcript
+        if: always() && steps.notification.outputs.wake == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: on-call-transcript
+          path: ${{ runner.temp }}/on-call/transcript.jsonl
+          if-no-files-found: ignore
+
+      - name: Summary
+        if: always()
+        env:
+          KIND: ${{ steps.notification.outputs.kind }}
+        run: |
+          {
+            echo "### On-call"
+            echo
+            case "$KIND" in
+              firing) echo "A firing alert woke the On-call agent: its incident issue is labelled \`incident\`." ;;
+              test) echo "Grafana's test notification arrived: the bridge works. No agent was woken." ;;
+              resolved) echo "A resolved notification arrived. No agent was woken." ;;
+              *) echo "The notification couldn't be read." ;;
+            esac
+          } >> "$GITHUB_STEP_SUMMARY"

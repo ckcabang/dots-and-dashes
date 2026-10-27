@@ -1,0 +1,33 @@
+{{- /*
+  The On-call contact point's custom payload: Grafana's webhook notification
+  reshaped into the {"event_type", "client_payload"} body GitHub's
+  repository_dispatch API takes, so the webhook POSTs straight to
+  https://api.github.com/repos/ckcabang/dots-and-dashes/dispatches and starts
+  .github/workflows/on-call.yml. scripts/provision-oncall puts this file's text
+  in the contact point's payload template. GitHub allows client_payload at
+  most 10 top-level keys: it has 7.
+*/ -}}
+{{- $alerts := coll.Slice -}}
+{{- range .Alerts -}}
+  {{- $alerts = coll.Append (coll.Dict
+      "status" .Status
+      "labels" .Labels
+      "annotations" .Annotations
+      "startsAt" .StartsAt
+      "generatorURL" .GeneratorURL
+      "fingerprint" .Fingerprint
+      "valueString" .ValueString
+    ) $alerts -}}
+{{- end -}}
+{{- coll.Dict
+    "event_type" "grafana-alert"
+    "client_payload" (coll.Dict
+      "status" .Status
+      "receiver" .Receiver
+      "groupLabels" .GroupLabels
+      "commonLabels" .CommonLabels
+      "commonAnnotations" .CommonAnnotations
+      "externalURL" .ExternalURL
+      "alerts" $alerts
+    )
+  | data.ToJSON -}}

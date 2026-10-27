@@ -9,6 +9,7 @@ and a local HTTP server instead.
 
 import json
 import os
+import re
 import stat
 import subprocess
 import sys
@@ -19,9 +20,11 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml  # type: ignore[import-untyped]
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = ROOT / "scripts" / "on-call"
+RUNBOOK = ROOT / "docs" / "runbooks" / "README.md"
 
 FAKE_FLYCTL = """#!/usr/bin/env python3
 import json, os, sys
@@ -374,3 +377,130 @@ def test_the_agent_runs_as_the_on_call_agent_definition(tmp_path):
     assert agent["prompt"] == body.strip()
     assert f"description: {agent['description']}" in frontmatter
     assert agent["model"] == "opus"
+
+
+WORKFLOWS = ROOT / ".github" / "workflows"
+
+
+def workflow(name: str) -> dict[Any, Any]:
+    return yaml.safe_load((WORKFLOWS / name).read_text())
+
+
+def triggers(flow: dict[Any, Any]) -> dict[str, Any]:
+    # YAML 1.1 reads the key `on` as True.
+    return flow[True]
+
+
+def on_call_step(name: str) -> dict[str, Any]:
+    (job,) = workflow("on-call.yml")["jobs"].values()
+    (step,) = [s for s in job["steps"] if s.get("name") == name]
+    return step
+
+
+AGENT_STEP = "Run the On-call agent"
+
+
+def test_a_grafana_alert_dispatch_is_the_on_call_workflows_only_trigger():
+    payload = (ROOT / "monitoring" / "on-call-payload.tmpl").read_text()
+
+    dispatch = {"repository_dispatch": {"types": ["grafana-alert"]}}
+    assert triggers(workflow("on-call.yml")) == dispatch
+    assert '"event_type" "grafana-alert"' in payload
+    assert '"client_payload"' in payload
+
+
+def test_the_workflow_token_can_read_the_code_and_write_issues_only():
+    flow = workflow("on-call.yml")
+
+    assert flow["permissions"] == {"contents": "read", "issues": "write"}
+    assert all("permissions" not in job for job in flow["jobs"].values())
+
+
+ALLOWED_TOOLS = [
+    "Read",
+    "Grep",
+    "Glob",
+    "Bash(scripts/on-call/grafana *)",
+    "Bash(scripts/on-call/fly *)",
+    "Bash(scripts/on-call/remedy *)",
+    "Bash(gh issue list *)",
+    "Bash(gh issue view *)",
+    "Bash(gh issue create *)",
+    "Bash(gh issue comment *)",
+    "Bash(gh label create incident *)",
+]
+
+
+def test_the_agent_may_read_telemetry_apply_a_remedy_and_file_an_issue_and_nothing_else():
+    step = on_call_step(AGENT_STEP)
+    run = step["run"]
+
+    assert step["env"]["ON_CALL_TOOLS"].strip().splitlines() == ALLOWED_TOOLS
+    assert '--allowedTools "$(paste -sd, <<<"$ON_CALL_TOOLS")"' in run
+    # The built-in tools it has at all: no Write, Edit, WebFetch or subagents.
+    assert "--tools Read,Grep,Glob,Bash" in run
+    # Anything not allowed above is refused, never asked about.
+    assert "--permission-mode dontAsk" in run
+    # The repo's own settings (allow rules, hooks) and MCP servers don't apply.
+    assert "--setting-sources user" in run
+    assert "--strict-mcp-config" in run
+    assert "--bare" in run
+
+
+def test_the_agent_runs_with_the_on_call_definition_only_for_a_firing_alert():
+    step = on_call_step(AGENT_STEP)
+
+    assert step["if"] == "steps.notification.outputs.wake == 'true'"
+    assert '--agents "$RUNNER_TEMP/on-call/agents.json" --agent on-call' in step["run"]
+    assert '< "$RUNNER_TEMP/on-call/prompt.md"' in step["run"]
+    assert on_call_step("Read the notification")["run"] == (
+        'scripts/on-call/prepare "$GITHUB_EVENT_PATH" "$RUNNER_TEMP/on-call"'
+    )
+
+
+def test_the_agent_gets_the_viewer_token_and_each_environments_deploy_token():
+    env = on_call_step(AGENT_STEP)["env"]
+
+    assert env["GRAFANA_URL"] == "${{ vars.GRAFANA_URL }}"
+    assert env["GRAFANA_VIEWER_TOKEN"] == "${{ secrets.GRAFANA_VIEWER_TOKEN }}"
+    assert env["FLY_DEV_API_TOKEN"] == "${{ secrets.FLY_API_TOKEN }}"
+    assert env["FLY_PROD_API_TOKEN"] == "${{ secrets.FLY_PROD_API_TOKEN }}"
+    assert env["ANTHROPIC_API_KEY"] == "${{ secrets.ANTHROPIC_API_KEY }}"
+    assert env["GH_TOKEN"] == "${{ github.token }}"
+
+
+def test_the_workflow_reads_no_secret_but_the_documented_ones():
+    text = (WORKFLOWS / "on-call.yml").read_text()
+    runbook = RUNBOOK.read_text()
+
+    secrets = set(re.findall(r"secrets\.([A-Z_]+)", text))
+    assert secrets == {
+        "ANTHROPIC_API_KEY",
+        "GRAFANA_VIEWER_TOKEN",
+        "FLY_API_TOKEN",
+        "FLY_PROD_API_TOKEN",
+    }
+    for name in [*secrets, "GRAFANA_URL", "dots-and-dashes-on-call-dispatch"]:
+        assert f"`{name}`" in runbook
+
+
+def test_dev_can_be_deployed_from_a_branch_to_stage_a_bad_deploy():
+    flow = workflow("deploy-dev.yml")
+    (job,) = flow["jobs"].values()
+    (checkout,) = [s for s in job["steps"] if s.get("uses", "").startswith("actions/checkout")]
+
+    assert "ref" in triggers(flow)["workflow_dispatch"]["inputs"]
+    assert checkout["with"]["ref"] == "${{ inputs.ref || github.sha }}"
+    # The image is tagged with the commit it was built from, not main's.
+    assert "SHA" not in job.get("env", {})
+    assert any('echo "SHA=$(git rev-parse HEAD)"' in s.get("run", "") for s in job["steps"])
+
+
+def test_the_runbook_says_how_to_stage_each_scenario_and_what_the_agent_runs():
+    runbook = RUNBOOK.read_text()
+
+    assert "gh workflow run deploy-dev.yml -f ref=" in runbook
+    assert "scripts/on-call/remedy rollback dev --from" in runbook
+    assert "CHAOS_SAVE_ERROR_FLAG=FLAG_MONTHLY_REVIEW" in runbook
+    assert "scripts/on-call/remedy flag-off" in runbook
+    assert "scripts/on-call/remedy raise-pool" in runbook

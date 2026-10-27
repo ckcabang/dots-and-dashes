@@ -21,7 +21,7 @@ The judgement calls a reviewer enforces. Mechanical rules are checks in `make ch
 
 ## Agents in CI
 
-An agent in a workflow reads text anyone can write, so treat its shell as an attacker's. The reference is the On-call agent: `.github/workflows/on-call.yml` and the wrappers in `scripts/on-call/`. `tests/scripts/test_agents_in_ci.py` checks the first rule on every workflow; the rest are for the reviewer.
+An agent in a workflow reads text anyone can write, so treat its shell as an attacker's. The reference is the On-call agent: `.github/workflows/on-call.yml` and the wrappers in `scripts/on-call/`. `tests/scripts/test_agents_in_ci.py` checks the first rule on every workflow: no step that starts `claude` (or a Claude Code action) gets a `secrets` or `github.token` expression in its `env:`, `run:` or `with:`. The rest are for the reviewer.
 
 - **The agent's environment holds no secret.** An earlier step writes each token to a 0600 file in a directory the agent can't read; only wrapper scripts read those files. Claude Code takes its own key through `apiKeyHelper`.
 - **The file tools reach the checkout only.** Read, Grep and Glob are scoped to `./**`, with denies for `/proc`, `/sys`, `/dev`, `/etc`, `/tmp`, `/root` and the runner's temp dir (built from `$RUNNER_TEMP`, not a hard-coded path).

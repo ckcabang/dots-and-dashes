@@ -26,36 +26,64 @@ ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = ROOT / "scripts" / "on-call"
 RUNBOOK = ROOT / "docs" / "runbooks" / "README.md"
 
-FAKE_FLYCTL = """#!/usr/bin/env python3
+# Every secret the On-call workflow puts in the agent's environment, each set
+# to a value the tests can look for.
+SECRETS = {
+    "FLY_DEV_API_TOKEN": "dev-token",
+    "FLY_PROD_API_TOKEN": "prod-token",
+    "GRAFANA_VIEWER_TOKEN": "viewer-token",
+    "ANTHROPIC_API_KEY": "anthropic-key",
+    "GH_TOKEN": "github-token",
+}
+
+# A fake command on PATH: logs its arguments and every secret value its
+# environment holds, and prints the canned output for its first argument.
+FAKE_COMMAND = """#!/usr/bin/env python3
 import json, os, sys
-with open(os.environ["FAKE_FLY_LOG"], "a") as log:
-    log.write(json.dumps({"args": sys.argv[1:], "token": os.environ.get("FLY_API_TOKEN")}) + "\\n")
-if sys.argv[1:2] == ["releases"]:
-    print(os.environ.get("FAKE_FLY_RELEASES", "[]"))
+secrets = json.loads(os.environ["FAKE_SECRETS"])
+held = sorted(name for name, value in os.environ.items() if value in secrets)
+with open(os.environ["FAKE_LOG"], "a") as log:
+    log.write(json.dumps({
+        "args": sys.argv[1:], "token": os.environ.get("FLY_API_TOKEN"), "held": held,
+    }) + "\\n")
+print(json.loads(os.environ["FAKE_OUTPUT"]).get(" ".join(sys.argv[1:3]), ""))
 """
 
 
-class Fly:
-    """A fake flyctl on PATH that records each call and serves a release history."""
+def secret_values(*names: str) -> set[str]:
+    """The test values of the named secrets, as a fake command reports them."""
+    return {SECRETS[name] for name in names}
+
+
+class Fake:
+    """Fake flyctl and gh on PATH that record each call, and the environment
+    a script runs in, holding every secret the workflow sets."""
 
     def __init__(self, tmp_path: Path) -> None:
         bin_dir = tmp_path / "bin"
         bin_dir.mkdir()
-        flyctl = bin_dir / "flyctl"
-        flyctl.write_text(FAKE_FLYCTL.replace("python3", sys.executable.replace("\\", "/"), 1))
-        flyctl.chmod(flyctl.stat().st_mode | stat.S_IEXEC)
-        self.log = tmp_path / "fly.log"
+        for name in ["flyctl", "gh"]:
+            command = bin_dir / name
+            command.write_text(
+                FAKE_COMMAND.replace("python3", sys.executable.replace("\\", "/"), 1)
+            )
+            command.chmod(command.stat().st_mode | stat.S_IEXEC)
+        self.log = tmp_path / "calls.log"
         self.log.touch()
         self.releases: list[dict[str, Any]] = []
+        # The secrets listing: a list as JSON, or a string printed as it is.
+        self.secrets: list[dict[str, Any]] | str = []
         self.env = {
             "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
-            "FAKE_FLY_LOG": str(self.log),
-            "FLY_DEV_API_TOKEN": "dev-token",
-            "FLY_PROD_API_TOKEN": "prod-token",
+            "FAKE_LOG": str(self.log),
+            "FAKE_SECRETS": json.dumps(sorted(SECRETS.values())),
+            **SECRETS,
         }
 
     def run(self, script: str, *args: str) -> subprocess.CompletedProcess[str]:
-        env = {**os.environ, **self.env, "FAKE_FLY_RELEASES": json.dumps(self.releases)}
+        listing = self.secrets if isinstance(self.secrets, str) else json.dumps(self.secrets)
+        output = {"releases -a": json.dumps(self.releases), "secrets list": listing}
+        env = {**os.environ, **self.env, "FAKE_OUTPUT": json.dumps(output)}
         env.pop("FLY_API_TOKEN", None)
         return subprocess.run(
             [str(SCRIPTS / script), *args], env=env, capture_output=True, text=True, cwd=ROOT
@@ -65,13 +93,18 @@ class Fly:
         return [json.loads(line) for line in self.log.read_text().splitlines()]
 
     def changes(self) -> list[list[str]]:
-        """The calls that change an app: everything but reading its releases."""
-        return [call["args"] for call in self.calls() if call["args"][0] != "releases"]
+        """The calls that change an app: everything but reading its releases or secrets."""
+        reads = (["releases"], ["secrets", "list"])
+        return [
+            call["args"]
+            for call in self.calls()
+            if not any(call["args"][: len(read)] == read for read in reads)
+        ]
 
 
 @pytest.fixture
-def fly(tmp_path: Path) -> Fly:
-    return Fly(tmp_path)
+def fly(tmp_path: Path) -> Fake:
+    return Fake(tmp_path)
 
 
 DEV = "registry.fly.io/dots-and-dashes-dev"
@@ -166,12 +199,79 @@ def test_raising_the_pool_sets_its_size_above_the_exhausted_maximum_and_redeploy
     assert fly.changes() == [["secrets", "set", "-a", "dots-and-dashes", "DB_POOL_SIZE=20"]]
 
 
-@pytest.mark.parametrize(("size", "above"), [("15", "15"), ("3", "15"), ("41", "15"), ("x", "1")])
+def test_the_staged_one_connection_pool_is_raised_to_ten(fly):
+    """The runbook's staged incident: DB_POOL_SIZE=1 is set on dev."""
+    fly.secrets = [{"Name": "DB_POOL_SIZE", "Digest": "abc"}]
+
+    result = fly.run("remedy", "raise-pool", "dev", "10", "--above", "1")
+
+    assert result.returncode == 0, result.stderr
+    assert fly.changes() == [["secrets", "set", "-a", "dots-and-dashes-dev", "DB_POOL_SIZE=10"]]
+
+
+@pytest.mark.parametrize(
+    ("size", "above"),
+    [("15", "15"), ("3", "15"), ("41", "15"), ("x", "1"), ("²", "1"), ("1", "-1")],
+)
 def test_the_pool_is_only_ever_raised_and_kept_under_postgres_connections(fly, size, above):
+    fly.secrets = [{"Name": "DB_POOL_SIZE", "Digest": "abc"}]
+
     result = fly.run("remedy", "raise-pool", "dev", size, "--above", above)
 
-    assert result.returncode != 0
+    assert result.returncode == 2, result.stderr
+    assert "Traceback" not in result.stderr
     assert fly.changes() == []
+
+
+def test_with_no_pool_size_set_the_pool_is_never_set_below_the_default_15(fly):
+    """Unset, SQLAlchemy allows 15 connections, whatever --above says."""
+    result = fly.run("remedy", "raise-pool", "prod", "1", "--above", "0")
+
+    assert result.returncode == 2
+    assert fly.changes() == []
+    assert "15" in result.stderr
+
+
+@pytest.mark.parametrize("size", ["5", "4"])
+def test_a_set_pool_size_is_never_raised_to_the_default_pools_5_or_less(fly, size):
+    fly.secrets = [{"Name": "DB_POOL_SIZE", "Digest": "abc"}]
+
+    result = fly.run("remedy", "raise-pool", "dev", size, "--above", "1")
+
+    assert result.returncode == 2
+    assert fly.changes() == []
+
+
+def test_the_pool_is_left_alone_when_the_secrets_listing_cant_be_read(fly):
+    """A listing that isn't JSON must never read as "DB_POOL_SIZE unset"."""
+    fly.secrets = "Error: not authorized"
+
+    result = fly.run("remedy", "raise-pool", "dev", "20", "--above", "15")
+
+    assert result.returncode == 2
+    assert fly.changes() == []
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["rollback", "dev", "--from", f"{DEV}:bad"],
+        ["flag-off", "dev", "FLAG_MONTHLY_REVIEW"],
+        ["raise-pool", "prod", "20", "--above", "15"],
+    ],
+)
+def test_a_remedys_flyctl_holds_only_its_own_environments_deploy_token(fly, args):
+    fly.releases = [release(2, "bad"), release(1, "good")]
+
+    result = fly.run("remedy", *args)
+
+    assert result.returncode == 0, result.stderr
+    env = args[1]
+    for call in fly.calls():
+        assert set(call["held"]) == {"FLY_API_TOKEN"}, call
+        assert call["token"] == f"{env}-token"
+    for value in SECRETS.values():
+        assert value not in result.stdout + result.stderr
 
 
 @pytest.mark.parametrize(
@@ -204,6 +304,8 @@ def test_the_agent_reads_fly_through_four_read_only_commands(fly, args, expected
     assert result.returncode == 0, result.stderr
     assert [call["args"] for call in fly.calls()] == [expected]
     assert {call["token"] for call in fly.calls()} == {f"{args[1]}-token"}
+    # No other secret reaches flyctl, whose logs the agent reads back.
+    assert [call["held"] for call in fly.calls()] == [["FLY_API_TOKEN"]]
 
 
 @pytest.mark.parametrize(
@@ -214,6 +316,74 @@ def test_any_other_fly_command_is_refused(fly, args):
 
     assert result.returncode != 0
     assert fly.calls() == []
+
+
+def test_filing_an_incident_creates_its_label_then_the_issue(fly):
+    result = fly.run("incident", "create", "--title", "Save failures on dev", "--body", "## Alert")
+
+    assert result.returncode == 0, result.stderr
+    assert [call["args"] for call in fly.calls()] == [
+        [
+            "label", "create", "incident", "--force",
+            "--color", "B60205", "--description", "Filed by the On-call agent",
+        ],
+        ["issue", "create", "--title", "Save failures on dev", "--body", "## Alert",
+         "--label", "incident"],
+    ]  # fmt: skip
+
+
+def test_an_incident_left_to_the_human_is_labelled_ready_for_human(fly):
+    result = fly.run("incident", "create", "--title", "t", "--body", "b", "--ready-for-human")
+
+    assert result.returncode == 0, result.stderr
+    assert fly.calls()[-1]["args"][-4:] == ["--label", "incident", "--label", "ready-for-human"]
+
+
+def test_findings_on_an_open_incident_go_in_a_comment(fly):
+    result = fly.run("incident", "comment", "42", "--body", "Still firing", "--ready-for-human")
+
+    assert result.returncode == 0, result.stderr
+    assert [call["args"] for call in fly.calls()] == [
+        ["issue", "comment", "42", "--body", "Still firing"],
+        ["issue", "edit", "42", "--add-label", "ready-for-human"],
+    ]
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["create", "--title", "t", "--body-file", "/proc/self/environ"],
+        ["create", "--title", "t", "-F", "/proc/self/environ"],
+        ["create", "--title", "t", "--body", "b", "--repo", "someone/else"],
+        ["create", "--title", "t", "--body", "b", "-R", "someone/else"],
+        ["create", "--title", "t", "--body", "b", "--label", "deploy"],
+        ["create", "--title", "t", "--bod", "b"],
+        ["create", "--title", "t"],
+        ["comment", "42", "--body-file", "/proc/self/environ"],
+        ["comment", "42; rm -rf /", "--body", "b"],
+        ["comment", "42", "--body", "b", "--repo", "someone/else"],
+        ["close", "42"],
+    ],
+)
+def test_the_incident_wrapper_takes_no_file_repo_or_other_command(fly, args):
+    result = fly.run("incident", *args)
+
+    assert result.returncode == 2
+    assert fly.calls() == []
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["create", "--title", "t", "--body", "b"],
+        ["comment", "42", "--body", "b", "--ready-for-human"],
+    ],
+)
+def test_the_incident_wrappers_gh_holds_the_github_token_and_no_other_secret(fly, args):
+    result = fly.run("incident", *args)
+
+    assert result.returncode == 0, result.stderr
+    assert [call["held"] for call in fly.calls()] == [["GH_TOKEN"]] * len(fly.calls())
 
 
 class Grafana:
@@ -304,6 +474,18 @@ def test_grafana_takes_no_method_or_body(grafana):
 
     assert result.returncode != 0
     assert grafana.requests == []
+
+
+def test_grafana_unreachable_fails_without_a_traceback_or_the_token(grafana):
+    grafana.server.shutdown()
+    grafana.server.server_close()
+    env = {"GRAFANA_URL": grafana.url, "GRAFANA_VIEWER_TOKEN": "viewer-token"}
+
+    result = run_grafana(env, "api/folders")
+
+    assert result.returncode == 1
+    assert "Traceback" not in result.stderr
+    assert "viewer-token" not in result.stdout + result.stderr
 
 
 def alert(name: str, status: str = "firing") -> dict[str, Any]:
@@ -417,28 +599,46 @@ def test_the_workflow_token_can_read_the_code_and_write_issues_only():
 
 
 ALLOWED_TOOLS = [
-    "Read",
-    "Grep",
-    "Glob",
+    "Read(./**)",
+    "Grep(./**)",
+    "Glob(./**)",
     "Bash(scripts/on-call/grafana *)",
     "Bash(scripts/on-call/fly *)",
     "Bash(scripts/on-call/remedy *)",
+    "Bash(scripts/on-call/incident *)",
     "Bash(gh issue list *)",
     "Bash(gh issue view *)",
-    "Bash(gh issue create *)",
-    "Bash(gh issue comment *)",
-    "Bash(gh label create incident *)",
     # Waiting between checks that the alert's signal recovered.
     "Bash(sleep *)",
 ]
+
+# Read rules apply to Grep and Glob too, and a deny beats any allow. These keep
+# the agent off the process environment (/proc/<pid>/environ holds the tokens)
+# and the system and temp dirs outside the checkout, the runner's own temp dir
+# (the prompt, the transcript) included. Not ~/**: the checkout is under it.
+DENIED_TOOLS = [
+    "Read(//proc/**)",
+    "Read(//sys/**)",
+    "Read(//dev/**)",
+    "Read(//etc/**)",
+    "Read(//tmp/**)",
+    "Read(//root/**)",
+    "Read(//home/runner/work/_temp/**)",
+]
+
+
+def allowed_tools() -> list[str]:
+    return on_call_step(AGENT_STEP)["env"]["ON_CALL_TOOLS"].strip().splitlines()
 
 
 def test_the_agent_may_read_telemetry_apply_a_remedy_and_file_an_issue_and_nothing_else():
     step = on_call_step(AGENT_STEP)
     run = step["run"]
 
-    assert step["env"]["ON_CALL_TOOLS"].strip().splitlines() == ALLOWED_TOOLS
+    assert allowed_tools() == ALLOWED_TOOLS
+    assert step["env"]["ON_CALL_DENIED"].strip().splitlines() == DENIED_TOOLS
     assert '--allowedTools "$(paste -sd, <<<"$ON_CALL_TOOLS")"' in run
+    assert '--disallowedTools "$(paste -sd, <<<"$ON_CALL_DENIED")"' in run
     # The built-in tools it has at all: no Write, Edit, WebFetch or subagents.
     assert "--tools Read,Grep,Glob,Bash" in run
     # Anything not allowed above is refused, never asked about.
@@ -447,6 +647,31 @@ def test_the_agent_may_read_telemetry_apply_a_remedy_and_file_an_issue_and_nothi
     assert "--setting-sources user" in run
     assert "--strict-mcp-config" in run
     assert "--bare" in run
+
+
+def test_no_file_tool_reaches_outside_the_checkout():
+    """A bare Read, Grep or Glob would reach /proc/self/environ and its tokens."""
+    for tool in allowed_tools():
+        name, _, scope = tool.partition("(")
+        if name in {"Read", "Grep", "Glob"}:
+            assert scope == "./**)", tool
+
+
+def test_no_gh_command_can_post_a_file_or_reach_another_repo():
+    """Only scripts/on-call/incident writes issues, and it takes text arguments
+    only; raw gh may only list and view."""
+    gh_rules = [tool for tool in allowed_tools() if tool.startswith("Bash(gh ")]
+
+    assert gh_rules == ["Bash(gh issue list *)", "Bash(gh issue view *)"]
+    for tool in allowed_tools():
+        assert "create" not in tool and "comment" not in tool and "label" not in tool, tool
+
+
+def test_the_checkout_keeps_no_github_token_in_git_config():
+    (job,) = workflow("on-call.yml")["jobs"].values()
+    (checkout,) = [s for s in job["steps"] if s.get("uses", "").startswith("actions/checkout")]
+
+    assert checkout["with"]["persist-credentials"] is False
 
 
 def test_the_agent_runs_with_the_on_call_definition_only_for_a_firing_alert():

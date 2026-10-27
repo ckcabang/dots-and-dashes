@@ -6,7 +6,8 @@
     scripts/on-call/remedy raise-pool <dev|prod> <size> --above <db.client.connection.max>
 
 Each runs flyctl with that environment's own deploy token, from
-FLY_DEV_API_TOKEN or FLY_PROD_API_TOKEN (without one, flyctl's own login).
+FLY_DEV_API_TOKEN or FLY_PROD_API_TOKEN (without one, flyctl's own login),
+and no other token in its environment.
 docs/runbooks/README.md gives when to use each.
 """
 
@@ -19,6 +20,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from on_call_env import child_env
+
 ROOT = Path(__file__).resolve().parents[2]
 ENVIRONMENTS = {
     "dev": {"app": "dots-and-dashes-dev", "config": "fly.dev.toml", "token": "FLY_DEV_API_TOKEN"},
@@ -27,6 +30,11 @@ ENVIRONMENTS = {
 # DB_POOL_SIZE times the Machines must stay under Postgres's max_connections
 # (100), less a few for migrations and psql: 40 leaves room for two Machines.
 MAX_POOL_SIZE = 40
+# With DB_POOL_SIZE unset, SQLAlchemy's default pool allows 5 connections plus
+# 10 overflow: a raise must go above 15. With it set, the new size must still
+# beat the default pool's 5, whatever --above says.
+DEFAULT_POOL_MAX = 15
+DEFAULT_POOL_SIZE = 5
 
 
 class Refused(Exception):
@@ -34,14 +42,9 @@ class Refused(Exception):
 
 
 def flyctl(env: str, *args: str, capture: bool = False) -> str:
-    """Run flyctl as ENV's deploy token, and only that one."""
-    environ = {
-        k: v for k, v in os.environ.items() if k not in {"FLY_API_TOKEN", "FLY_ACCESS_TOKEN"}
-    }
-    for other in ENVIRONMENTS.values():
-        environ.pop(other["token"], None)
-    if token := os.environ.get(ENVIRONMENTS[env]["token"]):
-        environ["FLY_API_TOKEN"] = token
+    """Run flyctl as ENV's deploy token, and with no other token at all."""
+    token = os.environ.get(ENVIRONMENTS[env]["token"])
+    environ = child_env(**({"FLY_API_TOKEN": token} if token else {}))
     print("+ flyctl " + " ".join(args), file=sys.stderr)
     result = subprocess.run(
         ["flyctl", *args],
@@ -111,8 +114,19 @@ def flag_off(env: str, flag: str) -> None:
     print(f"Turned {flag} off on {app}; setting the secret restarted its Machines.")
 
 
+def _pool_size_set(env: str) -> bool:
+    """Whether DB_POOL_SIZE is set on ENV's app, from Fly's secrets listing."""
+    app = ENVIRONMENTS[env]["app"]
+    listing = flyctl(env, "secrets", "list", "-a", app, "--json", capture=True)
+    try:
+        secrets = json.loads(listing)
+        return any(_field(secret, "name") == "DB_POOL_SIZE" for secret in secrets)
+    except (ValueError, TypeError, AttributeError):
+        raise Refused(f"couldn't read {app}'s secrets, so can't tell its pool size") from None
+
+
 def raise_pool(env: str, size: str, above: str) -> None:
-    if not (size.isdigit() and above.isdigit()):
+    if not (size.isdecimal() and size.isascii() and above.isdecimal() and above.isascii()):
         raise Refused(
             f"the pool size and --above must be whole numbers, not {size!r} and {above!r}"
         )
@@ -122,6 +136,13 @@ def raise_pool(env: str, size: str, above: str) -> None:
         raise Refused(
             f"DB_POOL_SIZE={size} is over {MAX_POOL_SIZE}, too close to Postgres's 100 connections"
         )
+    if not _pool_size_set(env) and int(size) <= DEFAULT_POOL_MAX:
+        raise Refused(
+            f"DB_POOL_SIZE is unset, so the pool already allows {DEFAULT_POOL_MAX} connections: "
+            f"{size} would lower it"
+        )
+    if int(size) <= DEFAULT_POOL_SIZE:
+        raise Refused(f"DB_POOL_SIZE={size} is no more than the default pool's {DEFAULT_POOL_SIZE}")
     app = ENVIRONMENTS[env]["app"]
     # Setting a secret makes a new release: Fly redeploys every Machine with it.
     flyctl(env, "secrets", "set", "-a", app, f"DB_POOL_SIZE={size}")
@@ -158,6 +179,9 @@ def main(argv: list[str]) -> int:
         return 2
     except subprocess.CalledProcessError as failed:
         print(f"flyctl failed ({failed.returncode}): see its output above", file=sys.stderr)
+        return 1
+    except Exception as error:  # no traceback: it could quote what it was handed
+        print(f"Failed: {type(error).__name__}", file=sys.stderr)
         return 1
     return 0
 

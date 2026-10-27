@@ -1,0 +1,81 @@
+#!/usr/bin/env python3
+"""File or update the On-call agent's incident issue, and nothing else.
+
+    scripts/on-call/incident create  --title <text> --body <text> [--ready-for-human]
+    scripts/on-call/incident comment <issue number> --body <text> [--ready-for-human]
+
+`create` makes sure the `incident` label exists, then files an issue labelled
+`incident` (and `ready-for-human` when asked). `comment` adds findings to an
+open incident and can label it `ready-for-human`.
+
+The title and body are text arguments only: there is no way to hand gh a file
+(no --body-file, no -F), another repository (no --repo) or any other label.
+gh runs with the GitHub token and no other: the Fly, Grafana and Anthropic
+tokens in the workflow's environment never reach it, so no issue can quote one.
+"""
+
+import argparse
+import os
+import subprocess
+import sys
+
+from on_call_env import child_env
+
+LABEL = "incident"
+LABEL_COLOR = "B60205"
+LABEL_DESCRIPTION = "Filed by the On-call agent"
+HANDOFF = "ready-for-human"
+
+
+def gh(*args: str) -> None:
+    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+    subprocess.run(
+        ["gh", *args], env=child_env(**({"GH_TOKEN": token} if token else {})), check=True
+    )
+
+
+def issue_number(value: str) -> str:
+    if not (value.isdecimal() and value.isascii()):
+        raise argparse.ArgumentTypeError(f"an issue number, not {value!r}")
+    return value
+
+
+def parser() -> argparse.ArgumentParser:
+    top = argparse.ArgumentParser(
+        prog="scripts/on-call/incident", description=__doc__.split("\n")[0], allow_abbrev=False
+    )
+    commands = top.add_subparsers(dest="command", required=True)
+    create = commands.add_parser("create", allow_abbrev=False)
+    create.add_argument("--title", required=True)
+    create.add_argument("--body", required=True)
+    create.add_argument("--ready-for-human", action="store_true")
+    comment = commands.add_parser("comment", allow_abbrev=False)
+    comment.add_argument("number", type=issue_number)
+    comment.add_argument("--body", required=True)
+    comment.add_argument("--ready-for-human", action="store_true")
+    return top
+
+
+def main(argv: list[str]) -> int:
+    args = parser().parse_args(argv)
+    try:
+        if args.command == "create":
+            gh("label", "create", LABEL, "--force",
+               "--color", LABEL_COLOR, "--description", LABEL_DESCRIPTION)  # fmt: skip
+            labels = ["--label", LABEL] + (["--label", HANDOFF] if args.ready_for_human else [])
+            gh("issue", "create", "--title", args.title, "--body", args.body, *labels)
+        else:
+            gh("issue", "comment", args.number, "--body", args.body)
+            if args.ready_for_human:
+                gh("issue", "edit", args.number, "--add-label", HANDOFF)
+    except subprocess.CalledProcessError as failed:
+        print(f"gh failed ({failed.returncode}): see its output above", file=sys.stderr)
+        return 1
+    except OSError as error:
+        print(f"Couldn't run gh: {type(error).__name__}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

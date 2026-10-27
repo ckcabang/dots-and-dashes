@@ -63,13 +63,17 @@ When an alert fires, the On-call agent (`.claude/agents/on-call.md`) wakes in Gi
 
 | Allowed | For |
 |---|---|
-| `scripts/on-call/grafana <api path>` | GET-only reads of Grafana's HTTP API with the Viewer token: alert rules and states, and Prometheus, Loki and Tempo through the data source proxy |
+| `Read`, `Grep`, `Glob` on `./**` | the checkout only; `/proc`, `/sys`, `/dev`, `/etc`, `/tmp`, `/root` and the runner's temp dir are denied outright |
+| `scripts/on-call/grafana <api path>` | GET-only reads of Grafana's HTTP API with the Viewer token: alert rules and states, and Prometheus, Loki and Tempo through the data source proxy. It follows no redirect, so the token goes to Grafana only |
 | `scripts/on-call/fly releases\|status\|secrets\|logs <dev\|prod>` | Fly's release history (with images), Machines, secret names and recent logs |
 | `scripts/on-call/remedy rollback\|flag-off\|raise-pool …` | the three remedies, and nothing else: each checks its arguments and refuses anything outside the remedy |
-| `gh issue list\|view\|create\|comment`, `gh label create incident` | the incident issue |
+| `scripts/on-call/incident create\|comment …` | the incident issue: title and body as text arguments only, labelled `incident` (and `ready-for-human`) |
+| `gh issue list`, `gh issue view` | finding an open incident to add to |
 | `sleep` | waiting between checks that the signal recovered |
 
 The repo's own Claude settings, hooks and MCP servers don't apply (`--bare --setting-sources user --strict-mcp-config`). Each run keeps the agent's transcript as an artifact.
+
+**Keeping the tokens out of public issues.** The tokens are in the agent's environment, and the agent reads text anyone can write: request paths in Fly's logs and in traces. So nothing it may run can read that environment or post a file. The file tools can't reach `/proc/<pid>/environ`. Each script passes its child process one token and no other (`scripts/on-call/on_call_env.py`): `flyctl` gets that environment's deploy token, and `gh` in `scripts/on-call/incident` gets the GitHub token. The incident script takes no `--body-file`, `-F` or `--repo`, and raw `gh` may only list and view issues. The checkout keeps no token in `.git/config` (`persist-credentials: false`). The scripts never print a token, and they fail with the error's type rather than a traceback.
 
 **Secrets and variables** the workflow reads, all set by `scripts/provision-oncall`:
 
@@ -138,7 +142,7 @@ Every wait for a pooled connection is a `db.connection.checkout` span under the 
 ## DB connection pool exhausted → raise the pool size and redeploy
 
 - **Signs**: save latency climbs while the database itself is healthy. In a slow save's trace, the time goes to a long `db.connection.checkout` span whose `db.client.connection.used` equals its `db.client.connection.max`: every connection was in use, so the save waited for one. The statements after it are fast. A checkout that waits out the pool's 30s timeout fails with `error.type="sqlalchemy.exc.TimeoutError"`.
-- **Remedy**: set `DB_POOL_SIZE` as a Fly secret, above the `db.client.connection.max` on the long checkout span, and redeploy. Unset, that maximum is already 15 (5 plus 10 overflow), so a smaller `DB_POOL_SIZE` lowers the limit and makes the exhaustion worse. Keep `DB_POOL_SIZE` times the number of Machines under Postgres's `max_connections` (100 by default), less a few for migrations and `psql`. The agent runs `scripts/on-call/remedy raise-pool <env> <size> --above <db.client.connection.max>`: it refuses a size that isn't above that maximum, or is over 40. Setting the secret makes a new release, so Fly redeploys every Machine with the new size.
+- **Remedy**: set `DB_POOL_SIZE` as a Fly secret, above the `db.client.connection.max` on the long checkout span, and redeploy. Unset, that maximum is already 15 (5 plus 10 overflow), so a smaller `DB_POOL_SIZE` lowers the limit and makes the exhaustion worse. Keep `DB_POOL_SIZE` times the number of Machines under Postgres's `max_connections` (100 by default), less a few for migrations and `psql`. The agent runs `scripts/on-call/remedy raise-pool <env> <size> --above <db.client.connection.max>`: it refuses a size that isn't above that maximum, or is over 40. It also checks Fly's own secrets listing rather than trusting `--above`: with `DB_POOL_SIZE` unset it refuses anything up to 15, and with it set, anything up to the default pool's 5. Setting the secret makes a new release, so Fly redeploys every Machine with the new size.
 - **Cleared when**: p95 save latency falls back under 1s.
 - **Stage it on dev** with one connection and slow saves. Each save is held 600ms, under the 1s threshold on its own, so only the queue for the one connection pushes p95 over:
 

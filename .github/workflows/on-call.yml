@@ -31,7 +31,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
+      # No token in .git/config: the agent can read the checkout.
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       # A firing alert wakes the agent; Grafana's test notification and a
       # resolved notification only show here.
@@ -50,7 +53,15 @@ jobs:
       # Claude Code as the On-call agent (.claude/agents/on-call.md), with the
       # tools below and no others: it reads Grafana and Fly through
       # scripts/on-call/grafana and scripts/on-call/fly, applies a remedy only
-      # through scripts/on-call/remedy, and files the incident issue with gh.
+      # through scripts/on-call/remedy, and files the incident issue only
+      # through scripts/on-call/incident.
+      #
+      # The tokens below are in the agent's environment, and the agent reads
+      # text anyone can write (request paths in logs and traces), so nothing
+      # it may run can read that environment or post a file: the file tools
+      # reach the checkout only and never /proc; each script hands its child
+      # (flyctl or gh) its one token and no other; the incident script takes
+      # text arguments only; raw gh may only list and view issues.
       - name: Run the On-call agent
         if: steps.notification.outputs.wake == 'true'
         shell: bash
@@ -64,23 +75,31 @@ jobs:
           FLY_PROD_API_TOKEN: ${{ secrets.FLY_PROD_API_TOKEN }}
           GH_TOKEN: ${{ github.token }}
           ON_CALL_TOOLS: |
-            Read
-            Grep
-            Glob
+            Read(./**)
+            Grep(./**)
+            Glob(./**)
             Bash(scripts/on-call/grafana *)
             Bash(scripts/on-call/fly *)
             Bash(scripts/on-call/remedy *)
+            Bash(scripts/on-call/incident *)
             Bash(gh issue list *)
             Bash(gh issue view *)
-            Bash(gh issue create *)
-            Bash(gh issue comment *)
-            Bash(gh label create incident *)
             Bash(sleep *)
+          # Read rules apply to Grep and Glob too, and a deny beats any allow.
+          ON_CALL_DENIED: |
+            Read(//proc/**)
+            Read(//sys/**)
+            Read(//dev/**)
+            Read(//etc/**)
+            Read(//tmp/**)
+            Read(//root/**)
+            Read(//home/runner/work/_temp/**)
         run: |
           claude --print --bare \
             --agents "$RUNNER_TEMP/on-call/agents.json" --agent on-call \
             --tools Read,Grep,Glob,Bash \
             --allowedTools "$(paste -sd, <<<"$ON_CALL_TOOLS")" \
+            --disallowedTools "$(paste -sd, <<<"$ON_CALL_DENIED")" \
             --permission-mode dontAsk \
             --setting-sources user --strict-mcp-config \
             --max-budget-usd 10 \

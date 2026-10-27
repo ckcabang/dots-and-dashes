@@ -14,6 +14,8 @@ import os
 import subprocess
 import sys
 
+from on_call_env import child_env
+
 APPS = {"dev": "dots-and-dashes-dev", "prod": "dots-and-dashes"}
 TOKENS = {"dev": "FLY_DEV_API_TOKEN", "prod": "FLY_PROD_API_TOKEN"}
 COMMANDS = {
@@ -29,11 +31,14 @@ def main(argv: list[str]) -> int:
         print(__doc__, file=sys.stderr)
         return 2
     command, env = argv
-    hidden = {"FLY_API_TOKEN", "FLY_ACCESS_TOKEN", *TOKENS.values()}
-    environ = {k: v for k, v in os.environ.items() if k not in hidden}
-    if token := os.environ.get(TOKENS[env]):
-        environ["FLY_API_TOKEN"] = token
-    return subprocess.run(["flyctl", *COMMANDS[command](APPS[env])], env=environ).returncode
+    token = os.environ.get(TOKENS[env])
+    # flyctl gets this environment's token and no other: none can reach its output.
+    environ = child_env(**({"FLY_API_TOKEN": token} if token else {}))
+    try:
+        return subprocess.run(["flyctl", *COMMANDS[command](APPS[env])], env=environ).returncode
+    except OSError as error:
+        print(f"Couldn't run flyctl: {type(error).__name__}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

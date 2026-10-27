@@ -50,7 +50,8 @@ if [[ ${1:-} == --abort ]]; then
     git diff -z --name-only -- . ':!.claude' | xargs -0 -r git --literal-pathspecs checkout --
     git diff -z --name-only --no-renames --diff-filter=A "$head" "$tree" -- . ':!.claude' \
         | xargs -0 -r rm -f --
-    mapfile -d '' -t dirs < "$state/dirs"
+    dirs=()
+    [[ ! -f $state/dirs ]] || mapfile -d '' -t dirs < "$state/dirs"
     for dir in "${dirs[@]}"; do
         rmdir -- "$dir" 2>/dev/null || true
     done

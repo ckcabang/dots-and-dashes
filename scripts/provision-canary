@@ -200,39 +200,52 @@ finish() {
 
 
 
-# One-time setup of the canary and the user-impact alerts (issue #21): the
-# Canary User on prod, its password as a Synthetic Monitoring secret, the
-# scripted (k6) check that runs monitoring/canary.js every minute, and the
-# alert rules and dashboard in monitoring/ imported into Grafana Cloud. Then a
-# firing test on dev. Run it once prod is up (scripts/provision-prod) and
-# exporting telemetry. Safe to re-run: Grafana imports overwrite, and an
-# existing Canary User is left as it is.
+# One-time setup of the canaries and the user-impact alerts (issue #21): a
+# Canary User on prod and one on dev, their passwords as Synthetic Monitoring
+# secrets, two scripted (k6) checks running monitoring/canary.js (prod every
+# minute, dev every 15 minutes), and the alert rules and dashboard in
+# monitoring/ imported into Grafana Cloud. Then two firing tests on dev. Run it
+# once prod is up (scripts/provision-prod) and both apps export telemetry.
+# Safe to re-run: Grafana imports overwrite, existing Canary Users and checks
+# are kept.
 #
-# The canary's password is typed here once and held only in this shell: it
-# goes to create-user on stdin, never on a command line, and you type it into
-# Grafana yourself. Use one from your password manager, since you type it twice.
+# Each Canary User's password is typed here once and held only in this shell:
+# it goes to create-user on stdin, never on a command line, and you type it
+# into Grafana yourself. Use ones from your password manager.
 #
-# It ends by printing the evidence to paste back on the PR: the check ID, the
-# imported rule UIDs, the dashboard URL and the firing test's result.
+# It ends by printing the evidence to paste back on the PR: both logins, both
+# check IDs, the imported rule UIDs, the dashboard URL and the firing tests.
 
 APP=dots-and-dashes
 DEV_APP=dots-and-dashes-dev
 CANARY_EMAIL=canary@dots-and-dashes.invalid
-# The check's job name: the canary alert and panel select probe_success on it.
-CANARY_JOB=dots-and-dashes-canary
+# The checks' job names: the canary alerts and panel select probe_success on them.
+CANARY_JOB_PROD=dots-and-dashes-canary-prod
+CANARY_JOB_DEV=dots-and-dashes-canary-dev
 FOLDER_UID=dots-and-dashes
 RULE_GROUP=key-journey
-DASHBOARD_UID=dots-and-dashes-key-journey
 SM_PATH=a/grafana-synthetic-monitoring-app
 EVIDENCE=()
 
-# create_canary APP: create the Canary User on APP's Machine, the password on
-# stdin. Succeeds if it was created or already exists.
+# app_for ENV / password_for ENV: the Fly app, and the Canary User's password.
+app_for() { if [[ "$1" == prod ]]; then echo "$APP"; else echo "$DEV_APP"; fi; }
+password_for() { if [[ "$1" == prod ]]; then printf '%s' "$CANARY_PASSWORD"; else printf '%s' "$CANARY_DEV_PASSWORD"; fi; }
+
+# with_timeout SECONDS CMD...: CMD, killed after SECONDS where `timeout` exists
+# (macOS has none by default: there it just runs).
+with_timeout() {
+  local seconds="$1"; shift
+  if command -v timeout >/dev/null 2>&1; then timeout "$seconds" "$@"; else "$@"; fi
+}
+
+# create_canary ENV: create ENV's Canary User on its app's Machine, the
+# password on stdin. Succeeds if it was created or already exists.
 create_canary() {
-  local app="$1" out
+  local app out
+  app=$(app_for "$1")
   # Killed after 2 minutes: if flyctl never hands the pipe to the Machine,
   # create-user would wait on stdin forever. The caller then falls back to --pty.
-  if out=$(printf '%s\n' "$CANARY_PASSWORD" | with_timeout 120 flyctl ssh console -a "$app" \
+  if out=$(password_for "$1" | with_timeout 120 flyctl ssh console -a "$app" \
       -C "/app/.venv/bin/dots-and-dashes create-user --canary --email $CANARY_EMAIL --timezone UTC --password-stdin" 2>&1); then
     say "$out"
     return 0
@@ -246,11 +259,101 @@ create_canary() {
   return 1
 }
 
-# login_status URL: what the app answers the Canary User's log in, the password
-# sent from stdin.
+# login_status ENV: what ENV's app answers its Canary User's log in, the
+# password sent from stdin; 000 when it doesn't answer.
 login_status() {
-  printf '%s' "$CANARY_PASSWORD" | curl -s -o /dev/null -w '%{http_code}' \
-    --data-urlencode "email=$CANARY_EMAIL" --data-urlencode "password@-" "$1/login"
+  password_for "$1" | curl -s -o /dev/null -w '%{http_code}' --max-time 90 \
+    --data-urlencode "email=$CANARY_EMAIL" --data-urlencode "password@-" \
+    "https://$(app_for "$1").fly.dev/login" || true
+}
+
+# canary_user_stage ENV: create ENV's Canary User, falling back to the CLI's
+# own prompt, and finish only once it logs in.
+canary_user_stage() {
+  local env="$1" app status
+  app=$(app_for "$env")
+  say "Runs create-user --canary in $app's Machine, the password piped in on stdin."
+  if confirm "Create $CANARY_EMAIL on $app?"; then
+    if ! create_canary "$env"; then
+      warn "That didn't work. Create it by hand instead: the CLI asks for the password."
+      step "flyctl ssh console -a $app --pty -C \"/app/.venv/bin/dots-and-dashes create-user --canary --email $CANARY_EMAIL --timezone UTC\""
+      pause "Done? Press Enter"
+    fi
+  fi
+  status=$(login_status "$env")
+  if [[ "$status" == 303 ]]; then
+    say "${GREEN}✓${RESET} The Canary User logs in to $env (303)."
+    EVIDENCE+=("Canary User $CANARY_EMAIL logs in to https://$app.fly.dev: POST /login answered 303")
+  else
+    warn "Logging in as the Canary User on $env answered $status, not 303."
+    warn "Its check would fail. Fix this before going on (Ctrl-C), then re-run."
+    EVIDENCE+=("Canary User on $env: POST /login answered $status, not 303")
+  fi
+  pause
+}
+
+# check_stage ENV FREQUENCY TIMEOUT: create (or keep and update) ENV's check.
+check_stage() {
+  local env="$1" frequency="$2" timeout="$3" key job app script existing kept=no
+  key=$([[ "$env" == prod ]] && echo CANARY_CHECK_ID || echo CANARY_DEV_CHECK_ID)
+  job=$([[ "$env" == prod ]] && echo "$CANARY_JOB_PROD" || echo "$CANARY_JOB_DEV")
+  app=$(app_for "$env")
+  # The script as this check runs it: the one ENVIRONMENT line set to ENV.
+  script=$(mktemp)
+  sed "s/const ENVIRONMENT = __ENV.CANARY_ENV || 'prod';/const ENVIRONMENT = __ENV.CANARY_ENV || '$env';/" \
+    monitoring/canary.js > "$script"
+  existing=$(_existing "$key" || true)
+  if [[ -n "$existing" ]] && confirm "Check $existing exists from a past run. Keep it, updating its script?"; then
+    # One check per environment: a second would double its saves and quota.
+    printf -v "$key" '%s' "$existing"
+    kept=yes
+    open_url "$GRAFANA_URL/$SM_PATH/checks/$existing/edit"
+    step "Replace its script with the one below. Keep job $job, then save."
+  else
+    open_url "$GRAFANA_URL/$SM_PATH/checks/new/scripted"
+    step "This is Synthetics → Checks → Create new check → Scripted."
+    step "Job name: $job (the alert and dashboard select on it)."
+    step "Target / instance: https://$app.fly.dev"
+    step "Script: replace the example with the one below."
+    step "Probe locations: one, the nearest to Fly's iad (e.g. North Virginia)."
+    step "Frequency: $frequency. Timeout: $timeout."
+    step "If the form has a Test button, run it: it should pass. Save the check."
+    note "Field names here are from the Synthetic Monitoring app's code; the form's"
+    note "layout may differ. Each run counts against your plan's execution quota."
+  fi
+  if copy_file "$script"; then
+    step "The script is on your clipboard: monitoring/canary.js with ENVIRONMENT '$env'."
+  elif [[ "$env" == prod ]]; then
+    step "The script: the whole of monitoring/canary.js, as it is."
+  else
+    step "The script: the whole of monitoring/canary.js, with its one line"
+    step "  const ENVIRONMENT = __ENV.CANARY_ENV || 'prod';  changed to end in 'dev';"
+  fi
+  rm -f "$script"
+  if [[ "$kept" == no ]]; then
+    ask "$key" "The check's ID (the number at the end of its page's URL, /checks/<id>):"
+  fi
+  write_env "$key" "${!key}"
+  EVIDENCE+=("Synthetic Monitoring check $job, every $frequency, timeout $timeout: $GRAFANA_URL/$SM_PATH/checks/${!key}")
+}
+
+# What the EXIT trap cleans up: the chaos secret a firing test has staged on
+# dev, the cookie jar, and the Grafana token's file.
+STAGED_SECRET=""
+JAR=""
+AUTH_FILE=""
+
+# cleanup runs on every exit, Ctrl-C and errors included, so a firing test
+# that stops early never leaves dev failing or slowing its saves.
+cleanup() {
+  trap '' INT TERM   # a second Ctrl-C mustn't cut the clean-up short
+  if [[ -n "$STAGED_SECRET" ]]; then
+    warn "Unsetting $STAGED_SECRET on $DEV_APP, ending the staged incident."
+    flyctl secrets unset -a "$DEV_APP" "$STAGED_SECRET" \
+      || warn "Couldn't. Run it yourself: flyctl secrets unset -a $DEV_APP $STAGED_SECRET"
+    STAGED_SECRET=""
+  fi
+  rm -f "$JAR" "$AUTH_FILE"
 }
 
 # grafana METHOD PATH [curl args...]: call Grafana's HTTP API with the token,
@@ -277,30 +380,8 @@ copy_file() {
 
 json_field() { python3 -c "import json,sys; print(json.load(sys.stdin)$1)"; }
 
-# with_timeout SECONDS CMD...: CMD, killed after SECONDS where `timeout` exists
-# (macOS has none by default: there it just runs).
-with_timeout() {
-  local seconds="$1"; shift
-  if command -v timeout >/dev/null 2>&1; then timeout "$seconds" "$@"; else "$@"; fi
-}
-
-# What the EXIT trap cleans up: the chaos secret a firing test has staged on
-# dev, the cookie jar, and the Grafana token's file.
-STAGED_SECRET=""
-JAR=""
-AUTH_FILE=""
-
-# cleanup runs on every exit, Ctrl-C and errors included, so a firing test
-# that stops early never leaves dev failing or slowing its saves.
-cleanup() {
-  if [[ -n "$STAGED_SECRET" ]]; then
-    warn "Unsetting $STAGED_SECRET on $DEV_APP, ending the staged incident."
-    flyctl secrets unset -a "$DEV_APP" "$STAGED_SECRET" \
-      || warn "Couldn't. Run it yourself: flyctl secrets unset -a $DEV_APP $STAGED_SECRET"
-    STAGED_SECRET=""
-  fi
-  rm -f "$JAR" "$AUTH_FILE"
-}
+# dev_has_secret NAME: whether NAME is a Fly secret on dev now.
+dev_has_secret() { flyctl secrets list -a "$DEV_APP" --json 2>/dev/null | grep -q "\"$1\""; }
 
 # drive_saves: log 30 Entries on dev as its Canary User and delete each saved
 # one. A request that fails, or doesn't answer at all, counts as failed.
@@ -308,16 +389,17 @@ drive_saves() {
   local body id
   saved=0 failed=0
   JAR=$(mktemp)
-  printf '%s' "$CANARY_PASSWORD" | curl -s -o /dev/null -c "$JAR" --data-urlencode \
+  password_for dev | curl -s -o /dev/null -c "$JAR" --max-time 90 --data-urlencode \
     "email=$CANARY_EMAIL" --data-urlencode "password@-" "https://$DEV_APP.fly.dev/login" || true
   for _ in $(seq 1 30); do
     body=$(curl -s -b "$JAR" -H 'Content-Type: application/json' -d '{"text":"canary check"}' \
-      -w '\n%{http_code}' "https://$DEV_APP.fly.dev/api/entries" || true)
+      --max-time 30 -w '\n%{http_code}' "https://$DEV_APP.fly.dev/api/entries" || true)
     if [[ "${body##*$'\n'}" == 201 ]]; then
       saved=$((saved + 1))
       id=$(json_field '["id"]' <<<"${body%$'\n'*}" 2>/dev/null || true)
       if [[ "$id" =~ ^[0-9]+$ ]]; then
-        curl -s -o /dev/null -b "$JAR" -X DELETE "https://$DEV_APP.fly.dev/api/entries/$id" || true
+        curl -s -o /dev/null -b "$JAR" --max-time 30 -X DELETE \
+          "https://$DEV_APP.fly.dev/api/entries/$id" || true
       fi
     else
       failed=$((failed + 1))
@@ -337,9 +419,17 @@ for g in json.load(sys.stdin)["data"]["groups"]:
 }
 
 # firing_test SECRET VALUE RULE: stage an incident on dev with the chaos
-# SECRET, drive saves, wait up to 10 minutes for RULE to fire, end it.
+# SECRET, drive saves, wait up to 10 minutes for RULE to fire, end it. Refuses
+# to stage over a switch someone already set on dev.
 firing_test() {
   local secret="$1" value="$2" rule="$3" state="" fired_at=""
+  if dev_has_secret "$secret"; then
+    warn "$secret is already set on $DEV_APP, perhaps by someone staging an incident."
+    warn "Not staging over it. Unset it once that's done, then re-run this wizard:"
+    step "flyctl secrets unset -a $DEV_APP $secret"
+    EVIDENCE+=("Firing test $secret: not run, $secret was already set on dev")
+    return 0
+  fi
   STAGED_SECRET="$secret"
   flyctl secrets set -a "$DEV_APP" "$secret=$value"
   drive_saves
@@ -357,6 +447,23 @@ firing_test() {
   STAGED_SECRET=""
 }
 
+# firing_stage SECRET VALUE RULE: the stage around firing_test, which needs
+# dev's Canary User to log in.
+firing_stage() {
+  if [[ "$(login_status dev)" != 303 ]]; then
+    warn "Dev's Canary User can't log in, so this firing test can't run, and the"
+    warn "criterion that '$3' fires stays unproven on the PR."
+    say "Fix dev's Canary User (stage 4's command), then re-run the whole wizard:"
+    step "flyctl ssh console -a $DEV_APP --pty -C \"/app/.venv/bin/dots-and-dashes create-user --canary --email $CANARY_EMAIL --timezone UTC\""
+    step "scripts/provision-canary"
+    note "Re-running is safe: it keeps the Canary Users, checks and imports already done."
+    EVIDENCE+=("Firing test $1: skipped, dev's Canary User can't log in; '$3' unproven")
+  elif confirm "Stage it now? It takes about five minutes."; then
+    firing_test "$@"
+  fi
+  pause
+}
+
 run_wizard() {
 
 cd "$(dirname "$0")/.."
@@ -365,9 +472,9 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-TOTAL_STAGES=10
+TOTAL_STAGES=11
 
-banner "The canary and the user-impact alerts"
+banner "The canaries and the user-impact alerts"
 
 stage "Tools, logins and your Grafana stack"
 for tool in flyctl curl python3; do
@@ -386,99 +493,62 @@ ask GRAFANA_URL "Grafana stack URL (https://<stack>.grafana.net):"
 GRAFANA_URL=${GRAFANA_URL%/}
 write_env GRAFANA_URL "$GRAFANA_URL"
 
-stage "The Canary User's password"
-say "The canary logs in to prod as $CANARY_EMAIL with this password."
-say "Pick one from your password manager: you type it again into Grafana."
-note "It's held in this shell only, never written to a file."
-while :; do
-  CANARY_PASSWORD=""
-  ask_secret CANARY_PASSWORD "Canary password (hidden):"
-  ask_secret CANARY_PASSWORD_AGAIN "Again (hidden):"
-  if [[ -z "$CANARY_PASSWORD" ]]; then warn "It can't be empty."
-  elif [[ "$CANARY_PASSWORD" != "$CANARY_PASSWORD_AGAIN" ]]; then warn "They don't match."
-  else break; fi
+stage "The Canary Users' passwords"
+say "Each canary logs in as $CANARY_EMAIL, prod's on prod and dev's on dev,"
+say "each with a password of its own. Pick them from your password manager:"
+say "you type each again into Grafana as a secret."
+note "They're held in this shell only, never written to a file."
+for env in prod dev; do
+  var=$([[ "$env" == prod ]] && echo CANARY_PASSWORD || echo CANARY_DEV_PASSWORD)
+  while :; do
+    printf -v "$var" '%s' ""
+    ask_secret "$var" "$env Canary User's password (hidden):"
+    ask_secret PASSWORD_AGAIN "Again (hidden):"
+    if [[ -z "${!var}" ]]; then warn "It can't be empty."
+    elif [[ "${!var}" != "$PASSWORD_AGAIN" ]]; then warn "They don't match."
+    else break; fi
+  done
 done
-unset CANARY_PASSWORD_AGAIN
+unset PASSWORD_AGAIN
+if [[ "$CANARY_PASSWORD" == "$CANARY_DEV_PASSWORD" ]]; then
+  warn "They're the same: a leak on dev then logs in on prod. Fine for now; change later."
+fi
 
 stage "Create the Canary User on prod"
-say "Runs create-user --canary in $APP's Machine, the password piped in on stdin."
-if confirm "Create $CANARY_EMAIL on $APP?"; then
-  if ! create_canary "$APP"; then
-    warn "That didn't work. Create it by hand instead: the CLI asks for the password."
-    step "flyctl ssh console -a $APP --pty -C \"/app/.venv/bin/dots-and-dashes create-user --canary --email $CANARY_EMAIL --timezone UTC\""
-    pause "Done? Press Enter"
-  fi
-fi
-status=$(login_status "https://$APP.fly.dev")
-if [[ "$status" == 303 ]]; then
-  say "${GREEN}✓${RESET} The Canary User logs in to prod (303)."
-  EVIDENCE+=("Canary User $CANARY_EMAIL logs in to https://$APP.fly.dev: POST /login answered 303")
-else
-  warn "Logging in as the Canary User on prod answered $status, not 303."
-  warn "The check would fail. Fix this before going on (Ctrl-C), then re-run."
-  pause
-fi
-pause
+canary_user_stage prod
 
-stage "A Canary User on dev, for staging incidents (optional)"
-say "The canary runs on prod only. To make dev's alerts fire on a staged"
-say "incident, something must save Entries on dev: the firing test at the end,"
-say "and the runbook's k6 command, log in as a Canary User of dev's own."
-if confirm "Create $CANARY_EMAIL on $DEV_APP too, with the same password?"; then
-  create_canary "$DEV_APP" || warn "Not created on dev; the firing test will be skipped."
-fi
-pause
+stage "Create the Canary User on dev"
+say "Dev's canary check and the firing tests at the end log in as it."
+canary_user_stage dev
 
-stage "Store the password as a Synthetic Monitoring secret"
-say "The canary script reads it with secrets.get('canary-password')."
+stage "Store the passwords as Synthetic Monitoring secrets"
+say "The canary script reads secrets.get('canary-password') on prod's check and"
+say "secrets.get('canary-password-dev') on dev's."
 open_url "$GRAFANA_URL/$SM_PATH/config/secrets"
 step "This is Testing & synthetics → Synthetics → Config → the Secrets tab."
-step "Create a secret named exactly: canary-password"
-step "Description: the Canary User's password (scripts/provision-canary)."
-step "Value: the canary password you just typed. Save it."
+step "Secret canary-password: prod's Canary User password."
+step "Secret canary-password-dev: dev's Canary User password."
+step "Description for each: the Canary User's password (scripts/provision-canary)."
+step "One already there from a past run: edit it and set the password you typed now."
 note "Not sure of the current button names: the Synthetic Monitoring app hides the"
 note "Secrets tab behind a feature flag. If your stack has no Secrets tab, stop here"
 note "and say so on the PR; the script needs a secret source to read the password."
-pause "Saved? Press Enter"
+pause "Both saved? Press Enter"
 
-stage "Create the canary check"
-existing_check=$(_existing CANARY_CHECK_ID || true)
-if [[ -n "$existing_check" ]] && confirm "Check $existing_check exists from a past run. Keep it, updating its script?"; then
-  # One check only: a second would double the canary's saves and its quota.
-  CANARY_CHECK_ID=$existing_check
-  open_url "$GRAFANA_URL/$SM_PATH/checks/$CANARY_CHECK_ID/edit"
-  if copy_file monitoring/canary.js; then
-    step "Replace its script with monitoring/canary.js, now on your clipboard."
-  else
-    step "Replace its script with the whole of monitoring/canary.js."
-  fi
-  step "Check it still runs every minute as job $CANARY_JOB, then save."
-  pause "Saved? Press Enter"
-else
-  open_url "$GRAFANA_URL/$SM_PATH/checks/new/scripted"
-  step "This is Synthetics → Checks → Create new check → Scripted."
-  step "Job name: $CANARY_JOB (the alert and dashboard select on it)."
-  step "Target / instance: https://$APP.fly.dev"
-  if copy_file monitoring/canary.js; then
-    step "Script: replace the example with monitoring/canary.js, now on your clipboard."
-  else
-    step "Script: replace the example with the whole of monitoring/canary.js."
-  fi
-  step "Probe locations: one, the nearest to Fly's iad (e.g. North Virginia)."
-  step "Frequency: 1 minute. If the form has a Test button, run it: it should pass."
-  step "Save the check. Its page's URL ends in /checks/<id>."
-  note "Field names here are from the Synthetic Monitoring app's code; the form's"
-  note "layout may differ. Each run counts against your plan's execution quota."
-  ask CANARY_CHECK_ID "The check's ID (the number at the end of its URL):"
-fi
-write_env CANARY_CHECK_ID "$CANARY_CHECK_ID"
-EVIDENCE+=("Synthetic Monitoring check $CANARY_CHECK_ID: $GRAFANA_URL/$SM_PATH/checks/$CANARY_CHECK_ID")
+stage "The prod canary check"
+check_stage prod "1 minute" "30 seconds"
+
+stage "The dev canary check"
+note "Dev stops when idle, so a run may first wait for its app and Postgres to"
+note "start: the timeout covers that cold start."
+check_stage dev "15 minutes (900 s)" "2 minutes (120 s)"
 
 stage "A Grafana token to import the alerts and dashboard"
 open_url "$GRAFANA_URL/org/serviceaccounts"
 step "This is Administration → Users and access → Service accounts."
 step "Add service account: name dots-and-dashes-provisioning, role Admin."
-step "On it: Add service account token, no expiry needed, Generate, copy it."
+step "If it's there from a past run, open it instead and add a new token to it."
+step "Add service account token, no expiry needed, Generate, copy it."
 note "Admin, because the alert provisioning API needs it. Delete the token after."
 ask_secret GRAFANA_TOKEN "Service account token (hidden):"
 AUTH_FILE=$(mktemp)
@@ -503,7 +573,7 @@ import json, sys
 for d in json.load(sys.stdin):
     if d.get("type") == "prometheus":
         print("    ", d["uid"], " ", d["name"])'
-  ask PROMETHEUS_UID "UID of the one holding prod's metrics (grafanacloud-<stack>-prom):"
+  ask PROMETHEUS_UID "UID of the one holding the apps' metrics (grafanacloud-<stack>-prom):"
 fi
 say "Folder $FOLDER_UID:"
 grafana POST api/folders -o /dev/null -w '  answered %{http_code} (409 or 412: already there)\n' \
@@ -532,6 +602,7 @@ EVIDENCE+=("Dashboard: $GRAFANA_URL$dashboard_url")
 open_url "$GRAFANA_URL$dashboard_url"
 step "Pick Environment prod: Saves by outcome should show the canary's saves"
 step "within a few minutes, and Canary pass rate should sit at 100%."
+step "Pick dev: its canary shows a point every 15 minutes."
 note "Where alerts are sent (the On-call contact point) is issue #22's; until then"
 note "they show under Alerting → Alert rules, and in the default contact point."
 pause
@@ -539,29 +610,18 @@ pause
 stage "Firing test: save failures on dev"
 say "Sets CHAOS_SAVE_ERROR_RATE=0.5 on $DEV_APP (it restarts), saves 30 Entries"
 say "there as the Canary User, waits for 'Save failures (dev)' to fire, then unsets"
-say "the switch (another restart). Needs the Canary User on dev from stage 4."
+say "the switch (another restart)."
 note "If the wizard stops partway, Ctrl-C included, it unsets the switch on its way out."
-dev_canary=no
-if [[ "$(login_status "https://$DEV_APP.fly.dev" || true)" == 303 ]]; then dev_canary=yes; fi
-if [[ "$dev_canary" != yes ]]; then
-  warn "The Canary User can't log in to dev, so the firing tests are skipped."
-  EVIDENCE+=("Firing tests: skipped (no Canary User on dev)")
-elif confirm "Stage it now? It takes about five minutes."; then
-  firing_test CHAOS_SAVE_ERROR_RATE 0.5 "Save failures (dev)"
-fi
-pause
+firing_stage CHAOS_SAVE_ERROR_RATE 0.5 "Save failures (dev)"
 
 stage "Firing test: save latency on dev"
 say "Sets CHAOS_SAVE_LATENCY_MS=1500 on $DEV_APP, so every save takes over 1.5s,"
 say "saves 30 Entries, waits for 'Save latency (dev)' to fire, then unsets it."
-if [[ "$dev_canary" == yes ]] && confirm "Stage it now? It takes about five minutes."; then
-  firing_test CHAOS_SAVE_LATENCY_MS 1500 "Save latency (dev)"
-  open_url "$GRAFANA_URL/alerting/list"
-  step "Both dev alerts show under Alerting → Alert rules; they resolve within ~10 minutes."
-fi
-pause
+firing_stage CHAOS_SAVE_LATENCY_MS 1500 "Save latency (dev)"
+open_url "$GRAFANA_URL/alerting/list"
+step "The dev alerts that fired show under Alerting → Alert rules; they resolve within ~10 minutes."
 
-unset CANARY_PASSWORD
+unset CANARY_PASSWORD CANARY_DEV_PASSWORD
 finish
 say "Paste this on the PR as the evidence:"
 printf '\n'

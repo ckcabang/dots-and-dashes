@@ -79,7 +79,7 @@ scripts/provision-prod
 
 ### Canary and alerts
 
-A Grafana Synthetic Monitoring scripted check runs [`monitoring/canary.js`](monitoring/canary.js) against prod every minute as the Canary User: log in, log an Entry, read it back, delete it. That steady traffic is what the save failure and save latency alerts fire on, with one real User. The alert rules ([`monitoring/alert-rules.json`](monitoring/alert-rules.json)) and the key journey dashboard ([`monitoring/dashboard.json`](monitoring/dashboard.json)) live in the repo; the runbook for each alert is [`docs/runbooks/README.md`](docs/runbooks/README.md). CI runs the canary once against the Compose test stack. To create the Canary User on prod, store its password as a Synthetic Monitoring secret, create the check, and import the rules and dashboard, run its wizard once prod is up:
+Two Grafana Synthetic Monitoring scripted checks run [`monitoring/canary.js`](monitoring/canary.js), each as its environment's Canary User: log in, log an Entry, read it back, delete it. One runs against prod every minute, the other against dev every 15 minutes. That steady traffic is what the save failure and save latency alerts fire on, with one real User. The alert rules ([`monitoring/alert-rules.json`](monitoring/alert-rules.json)) and the key journey dashboard ([`monitoring/dashboard.json`](monitoring/dashboard.json)) live in the repo; the runbook for each alert is [`docs/runbooks/README.md`](docs/runbooks/README.md). CI runs the canary once against the Compose test stack. To create both Canary Users, store their passwords as Synthetic Monitoring secrets, create both checks, import the rules and dashboard, and fire the dev alerts once, run its wizard once prod is up:
 
 ```sh
 scripts/provision-canary

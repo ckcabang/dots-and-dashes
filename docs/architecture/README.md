@@ -19,7 +19,7 @@ Exactly three, each testing behaviour through a public interface:
 
 1. **Journal (unit, `tests/unit`)**: domain rules with an injected clock and timezone, no I/O. `tests/unit/test_templates.py` beside them is a build check, not a seam: every template compiles.
 2. **HTTP API (integration, `tests/integration`)**: the app in-process against a real Postgres.
-3. **Browser (`tests/browser`)**: Playwright driving the app container for the key journeys.
+3. **Browser (`tests/browser`)**: Playwright driving the app container for the key journeys. A test that has to step the host's wall clock, which no test can do to a container, drives the same `create_app()` served in-process on the host instead (`test_session_clock.py`).
 
 `make test` runs all three against a Compose stack of the checkout's own (see `README.md`).
 

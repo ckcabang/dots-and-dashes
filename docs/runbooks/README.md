@@ -45,7 +45,7 @@ Every notification carries the environment, the image, a link to the dashboard f
 
 ## Alert: Canary failing
 
-- **Means**: a Synthetic Monitoring check running `monitoring/canary.js` passed under 80% of its runs in the window. On prod that is 2 or more failures in the last 5 runs; on dev, any failure among its 2 or 3. The checks are `dots-and-dashes-canary-prod`, which runs every minute and is read over 5 minutes, and `dots-and-dashes-canary-dev`, which runs every 15 minutes and is read over 35 minutes, so that window always holds two runs or more. On prod, a check that stops reporting fires too. On dev, no data resolves, so a paused dev check doesn't fire for good. Otherwise the two rules differ only in their `job`. The check logs in as its environment's Canary User and expects 303, saves an Entry (201), reads it back (200) and deletes it (204). A lost login answers 401, which the save metrics count as refused, so this is the only alert that sees it.
+- **Means**: a Synthetic Monitoring check running `monitoring/canary.js` passed under 80% of its runs in the window. On prod that is 2 or more failures in the last 5 runs; on dev, any failure among its 2 or 3. The checks are `dots-and-dashes-canary-prod`, which runs every minute and is read over 5 minutes, and `dots-and-dashes-canary-dev`, which runs every 15 minutes and is read over 35 minutes, so that window always holds two runs or more. On prod, a check that stops reporting fires too: its query reads -1 when the window holds no runs, and the notification then says the canary stopped reporting rather than giving a pass rate. On dev, no runs is no data, which resolves, so a paused dev check doesn't fire for good; its notification always gives the pass rate. Otherwise the two rules differ only in their `job`. The check logs in as its environment's Canary User and expects 303, saves an Entry (201), reads it back (200) and deletes it (204). A lost login answers 401, which the save metrics count as refused, so this is the only alert that sees it.
 - **First look**: the check's logs in Synthetic Monitoring name the step and status that failed. A failed save also shows on the save alerts. A 401 on the save, or a log in that isn't 303, means the Canary User's login broke: its password must match its Synthetic Monitoring secret, `canary-password` on prod or `canary-password-dev` on dev (`scripts/provision-canary`). On dev, a run that times out may just be a cold start, since dev stops when idle. The check's timeout is 120s to cover one. The probe can't know the image, so the rule joins its pass rate with the images the app's save metrics carried over the same window. That gives one notification per image serving the environment, or one naming no image when the app saved nothing (the app is down).
 - **Budget**: at one probe location the two checks use about 46k of the free tier's 100k test executions a month (prod every minute, about 43,200; dev every 15 minutes, about 2,900). Each extra probe location multiplies that, so keep one.
 
@@ -96,10 +96,12 @@ Set these as Fly secrets on dev (`fly secrets set -a dots-and-dashes-dev NAME=va
 Dev's canary saves only once every 15 minutes, too rarely to fire dev's save alerts in good time. Drive more saves with the canary script as dev's Canary User (`scripts/provision-canary` creates it), from a file holding `canary-password-dev=<its password>`:
 
 ```sh
-k6 run -i 50 --secret-source=file=canary.secrets -e CANARY_ENV=dev monitoring/canary.js
+k6 run --vus 1 --duration 5m --secret-source=file=canary.secrets -e CANARY_ENV=dev monitoring/canary.js
 ```
 
-The 10-minute windows keep the saves counted for 10 minutes after the run.
+Run it for 5 minutes, not a short burst: staging restarts the app, so its counters start over, and a burst that ends inside the first 60 s metrics export lands whole in the counters' first sample, where `rate()` sees no increase and the alert never fires. The 10-minute windows keep the saves counted for 10 minutes after the run.
+
+**Close the previous scenario's incident issue before staging the next.** The On-call agent comments on an open incident for the same alert instead of filing a new one, and the bad deploy and the broken flag both fire **Save failures (dev)**, so with the first one's issue still open the second scenario leaves no issue of its own.
 
 - **`CHAOS_SAVE_ERROR_RATE`**: the share of Entry saves to fail, from 0 to 1. The failures are spread evenly, not drawn at random: `0.25` fails exactly every fourth save on each Machine. The failure alert fires above 5%, so stage it with more than `0.05`. A failed save answers 500, counts as `outcome="failed"`, and its span and `Entry save failed` log carry `error.type="dots_and_dashes.chaos.InjectedSaveFailure"`.
 - **`CHAOS_SAVE_LATENCY_MS`**: milliseconds to slow every Entry save by, while it holds its database connection. It shows in `entry.save.duration` and as the time between the save's checkout and its first statement.
@@ -151,7 +153,7 @@ Every wait for a pooled connection is a `db.connection.checkout` span under the 
 
   ```sh
   flyctl secrets set -a dots-and-dashes-dev DB_POOL_SIZE=1 CHAOS_SAVE_LATENCY_MS=600
-  k6 run --vus 5 -i 100 --secret-source=file=canary.secrets -e CANARY_ENV=dev monitoring/canary.js
+  k6 run --vus 5 --duration 5m --secret-source=file=canary.secrets -e CANARY_ENV=dev monitoring/canary.js
   ```
 
   **Save latency (dev)** fires, and a slow save's trace shows a long checkout with `db.client.connection.used` = `db.client.connection.max` = 1. The agent runs `scripts/on-call/remedy raise-pool dev 10 --above 1`; with ten connections each save takes about 600ms and p95 falls under 1s. Afterwards: `flyctl secrets unset -a dots-and-dashes-dev DB_POOL_SIZE CHAOS_SAVE_LATENCY_MS`.
@@ -199,11 +201,13 @@ Stopped Machines aren't free: Fly charges about $0.15 per GB a month for each vo
 Pause it whenever you aren't staging an incident on dev. Dev's canary rule treats no data as OK, so a paused dev check never fires.
 
 1. In Grafana Cloud, open **Testing & synthetics → Synthetics → Checks**.
-2. Open `dots-and-dashes-canary-dev`, then **Edit**.
-3. Turn the check's **Enabled** switch off and **Save**. Its card in the check list shows it as disabled.
-4. Within a few idle minutes `flyctl status -a dots-and-dashes-dev` shows the dev Machine `stopped`, and soon after `flyctl status -a dots-and-dashes-dev-db` shows dev's Postgres stopped too.
+2. Open `dots-and-dashes-canary-dev`, then **Edit**. Its card sits beside `dots-and-dashes-canary-prod`, and a disabled prod check fires **Canary failing (prod)** until it is enabled again.
+3. Before changing anything, confirm the form's check name ends in `-dev`. If it ends in `-prod`, leave without saving and open the other card.
+4. Turn the check's **Enabled** switch off and **Save**. Its card in the check list shows it as disabled.
+5. Back in the check list, confirm `dots-and-dashes-canary-prod`'s card still shows it enabled. If it shows disabled, open it, turn **Enabled** back on and **Save**.
+6. Within a few idle minutes `flyctl status -a dots-and-dashes-dev` shows the dev Machine `stopped`, and soon after `flyctl status -a dots-and-dashes-dev-db` shows dev's Postgres stopped too.
 
-To resume it, before staging an incident, do the same and turn **Enabled** back on. The next run wakes dev, and may time out once on the cold start.
+To resume it, before staging an incident, do the same, with the same `-dev` name check and prod-still-enabled check, and turn **Enabled** back on. The next run wakes dev, and may time out once on the cold start.
 
 The field names follow the Synthetic Monitoring app as `scripts/provision-canary` describes it; the form's layout may differ.
 
@@ -212,7 +216,7 @@ The field names follow the Synthetic Monitoring app as `scripts/provision-canary
 Once grading is done, stop prod and its database. The journal's data stays on the database's `pgdata` volume, which is kept (and billed at about $0.15 a month), so everything comes back as it was.
 
 1. **Pause both canary checks first**, `dots-and-dashes-canary-prod` and `dots-and-dashes-canary-dev`, as [above](#pause-and-resume-the-dev-canary). Otherwise the prod canary fails against a stopped app and pages you.
-2. **Pause the `Canary failing (prod)` alert rule.** Prod's canary rule treats no data as alerting, so a paused prod check fires it on its own. In **Alerting → Alert rules**, find it in the **Dots & Dashes** folder and choose **Pause evaluation**.
+2. **Pause the `Canary failing (prod)` alert rule.** Prod's canary rule reads a window with no runs as -1 and fires, so a paused prod check fires it on its own. In **Alerting → Alert rules**, find it in the **Dots & Dashes** folder and choose **Pause evaluation**.
 3. Note the version prod runs, to bring the same one back:
 
    ```sh

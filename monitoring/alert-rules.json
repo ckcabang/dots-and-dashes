@@ -297,7 +297,7 @@
           "datasourceUid": "${PROMETHEUS_UID}",
           "model": {
             "refId": "A",
-            "expr": "group by (image) (last_over_time(entry_saves_total{job=\"prod/dots-and-dashes\"}[5m])) * 0 + on() group_left() min(avg_over_time(probe_success{job=\"dots-and-dashes-canary-prod\"}[5m])) or on() min(avg_over_time(probe_success{job=\"dots-and-dashes-canary-prod\"}[5m]))",
+            "expr": "group by (image) (last_over_time(entry_saves_total{job=\"prod/dots-and-dashes\"}[5m])) * 0 + on() group_left() (min(avg_over_time(probe_success{job=\"dots-and-dashes-canary-prod\"}[5m])) or on() vector(-1)) or on() (min(avg_over_time(probe_success{job=\"dots-and-dashes-canary-prod\"}[5m])) or on() vector(-1))",
             "instant": true,
             "range": false,
             "editorMode": "code",
@@ -343,8 +343,8 @@
         "alert": "canary-failing"
       },
       "annotations": {
-        "summary": "The canary is failing on prod",
-        "description": "The canary passed {{ humanizePercentage $values.A.Value }} of its runs on prod over the last 5 minutes (threshold 80%), or stopped reporting. It logs in as the Canary User, then saves, reads back and deletes an Entry; the check's logs name the step that failed. Image: {{ if $labels.image }}{{ $labels.image }}{{ else }}none, the app saved nothing in the window{{ end }}. This environment's canary runs every minute, so the window is 5 minutes: five runs or so. No data means the canary stopped, which fires. The prod and dev canary rules differ only in their job, this window and what no data means.",
+        "summary": "{{ if lt $values.A.Value 0.0 }}The canary stopped reporting on prod{{ else }}The canary is failing on prod{{ end }}",
+        "description": "{{ if lt $values.A.Value 0.0 }}The canary stopped reporting on prod: no runs in the last 5 minutes.{{ else }}The canary passed {{ humanizePercentage $values.A.Value }} of its runs on prod over the last 5 minutes (threshold 80%).{{ end }} It logs in as the Canary User, then saves, reads back and deletes an Entry; the check's logs name the step that failed. Image: {{ if $labels.image }}{{ $labels.image }}{{ else }}none, the app saved nothing in the window{{ end }}. This environment's canary runs every minute, so the window is 5 minutes: five runs or so. No runs in the window read as -1, which fires: the check is paused or deleted, or its probe is down. The prod and dev canary rules differ only in their job, this window and what no data means.",
         "environment": "prod",
         "image": "{{ if $labels.image }}{{ $labels.image }}{{ else }}none: the app saved nothing in the window{{ end }}",
         "runbook_url": "https://github.com/ckcabang/dots-and-dashes/blob/main/docs/runbooks/README.md#alert-canary-failing",
@@ -414,7 +414,7 @@
       },
       "annotations": {
         "summary": "The canary is failing on dev",
-        "description": "The canary passed {{ humanizePercentage $values.A.Value }} of its runs on dev over the last 35 minutes (threshold 80%), or stopped reporting. It logs in as the Canary User, then saves, reads back and deletes an Entry; the check's logs name the step that failed. Image: {{ if $labels.image }}{{ $labels.image }}{{ else }}none, the app saved nothing in the window{{ end }}. This environment's canary runs every 15 minutes, so the window is 35 minutes: always two runs or more. No data (the check paused or deleted) resolves rather than firing for good. The prod and dev canary rules differ only in their job, this window and what no data means.",
+        "description": "The canary passed {{ humanizePercentage $values.A.Value }} of its runs on dev over the last 35 minutes (threshold 80%). It logs in as the Canary User, then saves, reads back and deletes an Entry; the check's logs name the step that failed. Image: {{ if $labels.image }}{{ $labels.image }}{{ else }}none, the app saved nothing in the window{{ end }}. This environment's canary runs every 15 minutes, so the window is 35 minutes: always two runs or more. No runs in the window (the check paused or deleted) is no data, which resolves rather than firing for good. The prod and dev canary rules differ only in their job, this window and what no data means.",
         "environment": "dev",
         "image": "{{ if $labels.image }}{{ $labels.image }}{{ else }}none: the app saved nothing in the window{{ end }}",
         "runbook_url": "https://github.com/ckcabang/dots-and-dashes/blob/main/docs/runbooks/README.md#alert-canary-failing",

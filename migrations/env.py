@@ -4,7 +4,7 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy import create_engine
 
-from dots_and_dashes.persistence import Base
+from dots_and_dashes.persistence import Base, survive_cold_start
 
 config = context.config
 if config.config_file_name is not None:
@@ -29,7 +29,7 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
-    engine = create_engine(database_url())
+    engine = survive_cold_start(create_engine(database_url()))
     with engine.connect() as connection:
         context.configure(connection=connection, target_metadata=target_metadata)
         with context.begin_transaction():

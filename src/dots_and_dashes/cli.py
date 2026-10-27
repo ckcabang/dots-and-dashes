@@ -84,7 +84,8 @@ def _migrate() -> None:
     That is safe while migrations only add (see docs/runbooks/deploy.md)."""
     config = Config("alembic.ini")
     known = {script.revision for script in ScriptDirectory.from_config(config).walk_revisions()}
-    engine = create_engine(Settings.from_env().database_url)
+    # A release command can be the first to reach a stopped dev database.
+    engine = persistence.survive_cold_start(create_engine(Settings.from_env().database_url))
     try:
         with engine.connect() as connection:
             current = MigrationContext.configure(connection).get_current_revision()
@@ -108,7 +109,7 @@ def main(argv: list[str] | None = None) -> None:
         password_hash = accounts.hash_password(_password(args.password_env, args.password_stdin))
     except ValueError as exc:
         sys.exit(str(exc))
-    engine = create_engine(Settings.from_env().database_url)
+    engine = persistence.survive_cold_start(create_engine(Settings.from_env().database_url))
     try:
         with Session(engine) as session, session.begin():
             user = persistence.create_user(

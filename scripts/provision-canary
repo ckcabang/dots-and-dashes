@@ -238,6 +238,26 @@ with_timeout() {
   if command -v timeout >/dev/null 2>&1; then timeout "$seconds" "$@"; else "$@"; fi
 }
 
+# env_preflight: stop before the first prompt if write_env can't write
+# ENV_FILE, rather than after the passwords are typed. A sandbox can leave an
+# empty read-only (0444) .env placeholder in the checkout.
+env_preflight() {
+  local dir; dir=$(dirname "$ENV_FILE")
+  [[ "$dir" == . ]] && dir=$PWD
+  if [[ -e "$ENV_FILE" && ! -w "$ENV_FILE" ]]; then
+    warn "$ENV_FILE isn't writable, and this wizard saves its answers there."
+    step "Fix it: chmod 600 $ENV_FILE"
+    step "Then re-run this wizard. Nothing has been changed."
+    exit 1
+  fi
+  if [[ ! -e "$ENV_FILE" && ! -w "$dir" ]]; then
+    warn "$ENV_FILE doesn't exist and $dir isn't writable, so this wizard can't create it."
+    step "Fix it: chmod u+w $dir"
+    step "Then re-run this wizard. Nothing has been changed."
+    exit 1
+  fi
+}
+
 # create_canary ENV: create ENV's Canary User on its app's Machine, the
 # password on stdin. Succeeds if it was created or already exists.
 create_canary() {
@@ -490,6 +510,8 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 TOTAL_STAGES=11
+
+env_preflight
 
 banner "The canaries and the user-impact alerts"
 

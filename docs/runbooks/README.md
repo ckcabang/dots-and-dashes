@@ -144,7 +144,7 @@ The field names follow the Synthetic Monitoring app as `scripts/provision-canary
 Once grading is done, stop prod and its database. The journal's data stays on the database's `pgdata` volume, which is kept (and billed at about $0.15 a month), so everything comes back as it was.
 
 1. **Pause both canary checks first**, `dots-and-dashes-canary-prod` and `dots-and-dashes-canary-dev`, as [above](#pause-and-resume-the-dev-canary). Otherwise the prod canary fails against a stopped app and pages you.
-2. **Pause the `Canary failing (prod)` alert rule.** Prod's canary rule treats no data as alerting, so a paused prod check fires it on its own. In **Alerting → Alert rules**, find it in the `dots-and-dashes` folder and choose **Pause evaluation**.
+2. **Pause the `Canary failing (prod)` alert rule.** Prod's canary rule treats no data as alerting, so a paused prod check fires it on its own. In **Alerting → Alert rules**, find it in the **Dots & Dashes** folder and choose **Pause evaluation**.
 3. Note the version prod runs, to bring the same one back:
 
    ```sh

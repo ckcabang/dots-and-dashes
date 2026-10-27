@@ -28,9 +28,9 @@
       hx-on::after-request="if (event.detail.successful) this.reset()">
   <input type="hidden" name="day" value="{{ day.isoformat() }}">
   <input name="text" aria-label="New entry" autocomplete="off" autofocus required pattern=".*\S.*"
-         placeholder="Add a task" aria-describedby="entry-syntax">
+         placeholder="Add an entry" aria-describedby="entry-syntax">
 </form>
-<p class="syntax" id="entry-syntax">Start with <code>o</code> for an Event, <code>-</code> for a Note, <code>*</code> for Priority; add a time like <code>14:00</code>.</p>
+<p class="syntax" id="entry-syntax">Start with <code>.</code> or nothing for a Task, <code>o</code> for an Event, <code>-</code> for a Note. Put <code>*</code> for Priority or <code>!</code> for Inspiration in front, as in <code>*o</code>. A time like <code>14:00</code> goes after a Prefix: <code>. 14:00 call</code>.</p>
 
 <ul id="entries" class="entries">
   {% include "_entries.html" %}

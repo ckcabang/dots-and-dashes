@@ -145,7 +145,8 @@ input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px 
 ::placeholder { color: var(--muted); opacity: 1; }
 input[type="radio"] { accent-color: var(--accent); }
 
-/* The quick-entry box: a single underlined line above the list. */
+/* The quick-entry box: a single underlined line above the list, its text
+   indented to line up with the Entries' text after their bullets. */
 .sheet input[aria-label="New entry"] {
   display: block;
   width: 100%;
@@ -155,7 +156,7 @@ input[type="radio"] { accent-color: var(--accent); }
   border: 0;
   border-bottom: 1.5px solid var(--border-strong);
   border-radius: 0;
-  background: transparent url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M6 1v10M1 6h10' stroke='%23a2a8b4' stroke-width='1.6' stroke-linecap='round'/%3E%3C/svg%3E") no-repeat 0.45rem center;
+  background: transparent;
 }
 .sheet input[aria-label="New entry"]:focus { box-shadow: none; border-bottom-color: var(--accent); }
 

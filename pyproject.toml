@@ -49,6 +49,8 @@ mypy_path = ["src", "."]
 
 [tool.ruff]
 line-length = 100
+# The On-call agent's tools: Python scripts without a .py extension.
+extend-include = ["scripts/on-call/*"]
 
 [tool.ruff.lint]
 # Pinned here so CI and every machine lint the same way, whatever ruff config a user has.

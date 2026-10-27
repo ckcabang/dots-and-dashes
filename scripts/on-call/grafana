@@ -53,12 +53,18 @@ def main(argv: list[str]) -> int:
         return 2
     url, token = setting("GRAFANA_URL").rstrip("/"), setting("GRAFANA_VIEWER_TOKEN")
     if not (url and token):
-        print("GRAFANA_URL and GRAFANA_VIEWER_TOKEN must be set (scripts/provision-oncall)",
-              file=sys.stderr)
+        print(
+            "GRAFANA_URL and GRAFANA_VIEWER_TOKEN must be set (scripts/provision-oncall)",
+            file=sys.stderr,
+        )
         return 2
-    request = urllib.request.Request(f"{url}/{path}", headers={
-        "Authorization": f"Bearer {token}", "Accept": "application/json",
-    })
+    request = urllib.request.Request(
+        f"{url}/{path}",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+        },
+    )
     try:
         with urllib.request.urlopen(request, timeout=60) as response:
             sys.stdout.write(response.read().decode())

@@ -35,14 +35,20 @@ class Refused(Exception):
 
 def flyctl(env: str, *args: str, capture: bool = False) -> str:
     """Run flyctl as ENV's deploy token, and only that one."""
-    environ = {k: v for k, v in os.environ.items() if k not in {"FLY_API_TOKEN", "FLY_ACCESS_TOKEN"}}
+    environ = {
+        k: v for k, v in os.environ.items() if k not in {"FLY_API_TOKEN", "FLY_ACCESS_TOKEN"}
+    }
     for other in ENVIRONMENTS.values():
         environ.pop(other["token"], None)
     if token := os.environ.get(ENVIRONMENTS[env]["token"]):
         environ["FLY_API_TOKEN"] = token
     print("+ flyctl " + " ".join(args), file=sys.stderr)
     result = subprocess.run(
-        ["flyctl", *args], env=environ, cwd=ROOT, text=True, check=True,
+        ["flyctl", *args],
+        env=environ,
+        cwd=ROOT,
+        text=True,
+        check=True,
         stdout=subprocess.PIPE if capture else None,
     )
     return result.stdout or ""
@@ -69,7 +75,8 @@ def rollback(env: str, bad: str) -> None:
     app = ENVIRONMENTS[env]["app"]
     releases = json.loads(flyctl(env, "releases", "-a", app, "--image", "--json", capture=True))
     ok = [
-        r for r in releases
+        r
+        for r in releases
         if _field(r, "imageref") and str(_field(r, "status") or "").lower() != "failed"
     ]
     ok.sort(key=lambda r: int(_field(r, "version") or 0), reverse=True)
@@ -77,10 +84,10 @@ def rollback(env: str, bad: str) -> None:
         raise Refused(f"{app} has no release to read: nothing rolled back")
     current = _field(ok[0], "imageref")
     if not _same_image(current, bad):
-        raise Refused(
-            f"{app} runs {current} now, not the alert's {bad}: nothing rolled back"
-        )
-    previous = next((_field(r, "imageref") for r in ok if not _same_image(_field(r, "imageref"), current)), None)
+        raise Refused(f"{app} runs {current} now, not the alert's {bad}: nothing rolled back")
+    previous = next(
+        (_field(r, "imageref") for r in ok if not _same_image(_field(r, "imageref"), current)), None
+    )
     if previous is None:
         raise Refused(f"{app} has run no other image: nothing rolled back")
     flyctl(env, "deploy", "--config", ENVIRONMENTS[env]["config"], "--image", previous)
@@ -96,7 +103,9 @@ def known_flags() -> set[str]:
 
 def flag_off(env: str, flag: str) -> None:
     if flag not in known_flags():
-        raise Refused(f"{flag} is not a feature flag the app reads ({', '.join(sorted(known_flags()))})")
+        raise Refused(
+            f"{flag} is not a feature flag the app reads ({', '.join(sorted(known_flags()))})"
+        )
     app = ENVIRONMENTS[env]["app"]
     flyctl(env, "secrets", "set", "-a", app, f"{flag}=off")
     print(f"Turned {flag} off on {app}; setting the secret restarted its Machines.")
@@ -104,11 +113,15 @@ def flag_off(env: str, flag: str) -> None:
 
 def raise_pool(env: str, size: str, above: str) -> None:
     if not (size.isdigit() and above.isdigit()):
-        raise Refused(f"the pool size and --above must be whole numbers, not {size!r} and {above!r}")
+        raise Refused(
+            f"the pool size and --above must be whole numbers, not {size!r} and {above!r}"
+        )
     if int(size) <= int(above):
         raise Refused(f"DB_POOL_SIZE={size} doesn't raise the pool above {above}")
     if int(size) > MAX_POOL_SIZE:
-        raise Refused(f"DB_POOL_SIZE={size} is over {MAX_POOL_SIZE}, too close to Postgres's 100 connections")
+        raise Refused(
+            f"DB_POOL_SIZE={size} is over {MAX_POOL_SIZE}, too close to Postgres's 100 connections"
+        )
     app = ENVIRONMENTS[env]["app"]
     # Setting a secret makes a new release: Fly redeploys every Machine with it.
     flyctl(env, "secrets", "set", "-a", app, f"DB_POOL_SIZE={size}")
@@ -116,7 +129,9 @@ def raise_pool(env: str, size: str, above: str) -> None:
 
 
 def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(prog="scripts/on-call/remedy", description=__doc__.split("\n")[0])
+    parser = argparse.ArgumentParser(
+        prog="scripts/on-call/remedy", description=__doc__.split("\n")[0]
+    )
     remedies = parser.add_subparsers(dest="remedy", required=True)
     for name in ["rollback", "flag-off", "raise-pool"]:
         sub = remedies.add_parser(name)
@@ -127,7 +142,9 @@ def main(argv: list[str]) -> int:
             sub.add_argument("flag")
         else:
             sub.add_argument("size")
-            sub.add_argument("--above", required=True, help="db.client.connection.max on the long checkout")
+            sub.add_argument(
+                "--above", required=True, help="db.client.connection.max on the long checkout"
+            )
     args = parser.parse_args(argv)
     try:
         if args.remedy == "rollback":

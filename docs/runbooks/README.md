@@ -1,5 +1,16 @@
 # Runbooks
 
+Contents:
+
+- [Alert: Save failures](#alert-save-failures)
+- [Alert: Save latency](#alert-save-latency)
+- [Alert: Canary failing](#alert-canary-failing)
+- [Staging an incident](#staging-an-incident)
+- [Bad deploy → roll back](#bad-deploy--roll-back)
+- [Broken feature flag → turn it off](#broken-feature-flag--turn-it-off)
+- [DB connection pool exhausted → raise the pool size and redeploy](#db-connection-pool-exhausted--raise-the-pool-size-and-redeploy)
+- [Running costs](#running-costs): free-tier usage, the Fly bill, pausing the canaries and shutting down after grading
+
 Three alerts guard the key journey (log an Entry on today's Daily Log). Their rules are `monitoring/alert-rules.json` and their panels are on the **Dots & Dashes: key journey** dashboard (`monitoring/dashboard.json`); `scripts/provision-canary` imports both into Grafana Cloud.
 
 - **Save failures**: Entry save failure rate above 5% over 10 minutes.
@@ -76,3 +87,92 @@ Every wait for a pooled connection is a `db.connection.checkout` span under the 
 - **Signs**: save latency climbs while the database itself is healthy. In a slow save's trace, the time goes to a long `db.connection.checkout` span whose `db.client.connection.used` equals its `db.client.connection.max`: every connection was in use, so the save waited for one. The statements after it are fast. A checkout that waits out the pool's 30s timeout fails with `error.type="sqlalchemy.exc.TimeoutError"`.
 - **Remedy**: set `DB_POOL_SIZE` as a Fly secret, above the `db.client.connection.max` on the long checkout span, and redeploy. Unset, that maximum is already 15 (5 plus 10 overflow), so a smaller `DB_POOL_SIZE` lowers the limit and makes the exhaustion worse. Keep `DB_POOL_SIZE` times the number of Machines under Postgres's `max_connections` (100 by default), less a few for migrations and `psql`.
 - **Cleared when**: p95 save latency falls back under 1s.
+
+## Running costs
+
+The project runs on Grafana Cloud's free tier and about $8 a month of Fly.io. Neither needs watching day to day, but the canaries are what use both up, so this is where to check and what to switch off.
+
+### Grafana Cloud free tier
+
+| Allowance | Free tier | This project uses |
+|-----------|-----------|-------------------|
+| Synthetic Monitoring API and scripted test executions | 100,000 a month (browser checks: 10,000, unused) | About 46,000 at one probe location: the [canary budget](#alert-canary-failing) |
+| Metrics | 10,000 active series | About 200, exported once a minute (the OpenTelemetry default) |
+| Logs | 50 GB | Well under |
+| Traces | 50 GB | Well under |
+| Retention | 14 days | Everything older is deleted |
+
+Check usage in your Grafana Cloud stack's **Cost Management and Billing** app, on its **Usage** tab: it shows each product's usage, Synthetic Monitoring's in test executions. The executions are the only allowance near its limit, and each extra probe location on a check multiplies them.
+
+**Screenshot the evidence on the day.** Grafana deletes data after 14 days, so the incidents, firing alerts and dashboards a grader should see won't be there later. When you stage an incident or an alert fires, screenshot the dashboard, the alert in **Alerting → Alert rules**, the trace and log that explain it, and link the incident issue the On-call agent filed.
+
+### Fly cost
+
+Fly list prices for Ashburn (`iad`), from [`_docs/plan.md`](../../_docs/plan.md#hosting-cost) (October 2026), billed per second while a Machine runs. Postgres runs on our own Machines rather than Fly Managed Postgres to keep this low ([ADR-0003](../adr/0003-self-run-postgres-on-fly.md)).
+
+| Machine | Size | Always on? | ~Per month |
+|---------|------|------------|-----------|
+| `dots-and-dashes` (prod app) | shared-cpu-1x, 512MB | Yes, by design: the prod canary saves every minute | $3.69 |
+| `dots-and-dashes-db` (prod Postgres) | shared-cpu-1x, 256MB + 1GB volume | Yes, by design, alongside the prod app | $2.34 |
+| `dots-and-dashes-dev` (dev app) | shared-cpu-1x, 512MB | No: auto-stops when idle | ~$1 |
+| `dots-and-dashes-dev-db` (dev Postgres) | shared-cpu-1x, 256MB + 1GB volume | No: stops once the dev app has | ~$1 |
+| **Total** | | | **~$8** |
+
+**What the dev canary does to that.** The ~$1 for each dev Machine assumes dev is mostly stopped. The dev canary runs every 15 minutes, so it wakes the dev app, and through it dev's Postgres, about 96 times a day, and each Machine then stays up until Fly sees it idle and stops it. Dev therefore runs much more than "mostly stopped". The worst case is dev always on, priced like prod: $3.69 + $2.34 for dev, so about **$12 a month** in all.
+
+**Pausing the dev canary saves Fly money too.** With no check waking it, dev sleeps, and its two Machines cost close to their volume and stopped root file system only. It also saves about 2,900 Synthetic Monitoring executions a month.
+
+**The bill.** See it on the Fly dashboard's **Billing** page, per organization; each invoice breaks down the charges. Spend controls, checked against Fly's [billing](https://docs.fly.io/about/billing) and [pricing](https://docs.fly.io/about/pricing) docs on 2026-10-26: Fly offers prepaid credits, bought on the Billing page (from $25), with usage taken off the balance each month. Those docs mention no spending limit, budget cap or billing alert, so treat any such control as unconfirmed and check the Billing page. Fly says it will discuss a refund for resources created by mistake (billing@fly.io).
+
+Stopped Machines aren't free: Fly charges about $0.15 per GB a month for each volume, attached or not, and for a stopped Machine's root file system (approximate, from Fly's pricing page). That's cents a month here.
+
+### Pause and resume the dev canary
+
+Pause it whenever you aren't staging an incident on dev. Dev's canary rule treats no data as OK, so a paused dev check never fires.
+
+1. In Grafana Cloud, open **Testing & synthetics → Synthetics → Checks**.
+2. Open `dots-and-dashes-canary-dev`, then **Edit**.
+3. Turn the check's **Enabled** switch off and **Save**. Its card in the check list shows it as disabled.
+4. Within a few idle minutes `flyctl status -a dots-and-dashes-dev` shows the dev Machine `stopped`, and soon after `flyctl status -a dots-and-dashes-dev-db` shows dev's Postgres stopped too.
+
+To resume it, before staging an incident, do the same and turn **Enabled** back on. The next run wakes dev, and may time out once on the cold start.
+
+The field names follow the Synthetic Monitoring app as `scripts/provision-canary` describes it; the form's layout may differ.
+
+### Shut down after grading
+
+Once grading is done, stop prod and its database. The journal's data stays on the database's `pgdata` volume, which is kept (and billed at about $0.15 a month), so everything comes back as it was.
+
+1. **Pause both canary checks first**, `dots-and-dashes-canary-prod` and `dots-and-dashes-canary-dev`, as [above](#pause-and-resume-the-dev-canary). Otherwise the prod canary fails against a stopped app and pages you.
+2. **Pause the `Canary failing (prod)` alert rule.** Prod's canary rule treats no data as alerting, so a paused prod check fires it on its own. In **Alerting → Alert rules**, find it in the `dots-and-dashes` folder and choose **Pause evaluation**.
+3. Note the version prod runs, to bring the same one back:
+
+   ```sh
+   flyctl releases -a dots-and-dashes --image
+   ```
+
+4. Stop the prod app, then its database. `scale count 0` removes the app's Machines; it has no volume, so nothing is lost. `machine stop` asks which Machine to stop: there is one.
+
+   ```sh
+   flyctl scale count 0 -a dots-and-dashes
+   flyctl machine stop -a dots-and-dashes-db
+   ```
+
+5. Check both: `flyctl status -a dots-and-dashes` lists no Machines, and `flyctl status -a dots-and-dashes-db` shows the database `stopped`.
+
+To start up again, in reverse order:
+
+1. Start the database:
+
+   ```sh
+   flyctl machine start -a dots-and-dashes-db
+   ```
+
+2. Bring the app back. `flyctl scale count 1 -a dots-and-dashes` alone can't do it from zero, because Fly's [scale-count docs](https://docs.fly.io/launch/scale-count) say scaling clones an existing Machine. Redeploy instead: run **Deploy to prod** with the version you noted before shutting down ([deploy.md](deploy.md#deploy)). A deploy onto no Machines may create two for high availability, so then scale back to the one prod runs:
+
+   ```sh
+   flyctl scale count 1 -a dots-and-dashes
+   ```
+
+3. Check it: `https://dots-and-dashes.fly.dev/login` loads and logging an Entry works.
+4. Resume the `dots-and-dashes-canary-prod` check, and once its first run has passed, the `Canary failing (prod)` rule (**Resume evaluation**), so the rule never reads a window with no data. Resume the dev check only if you're staging an incident.

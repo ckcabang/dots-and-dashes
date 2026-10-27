@@ -109,6 +109,42 @@ def test_the_dev_canary_rule_differs_from_prods_only_in_job_and_window():
     assert "every 15 minutes" in description and "35 minutes" in description
 
 
+# Grafana's own no-data signal: on no data it "re-uses the latest known set of
+# fields in Values, but will use -1 in place of the measured value"
+# (grafana.com/docs/grafana/latest/alerting/fundamentals/alert-rule-evaluation/
+# nodata-and-error-states/). A pass rate is never below 0, so -1 means no data.
+NO_DATA = "{{ if lt $values.A.Value 0.0 }}"
+
+
+def _no_data_and_data_branches(text: str) -> tuple[str, str]:
+    assert text.count(NO_DATA) == 1
+    no_data, rest = text.split(NO_DATA, 1)[1].split("{{ else }}", 1)
+    return no_data, rest.split("{{ end }}", 1)[0]
+
+
+@pytest.mark.parametrize("env", ["prod", "dev"])
+@pytest.mark.parametrize("annotation", ["summary", "description"])
+def test_the_canary_alert_says_the_canary_stopped_reporting_rather_than_a_pass_rate_on_no_data(
+    env, annotation
+):
+    """Rendering the -1 as a pass rate read "passed 100%" while the rule fired on no data (#92)."""
+    text = _rules()[f"dnd-canary-failing-{env}"]["annotations"][annotation]
+
+    no_data, data = _no_data_and_data_branches(text)
+    assert "stopped reporting" in no_data
+    assert "$values" not in no_data and "%" not in no_data
+    assert "stopped reporting" not in data
+
+
+@pytest.mark.parametrize("env", ["prod", "dev"])
+def test_the_canary_alert_gives_the_pass_rate_when_the_canary_reports(env):
+    description = _rules()[f"dnd-canary-failing-{env}"]["annotations"]["description"]
+
+    _, data = _no_data_and_data_branches(description)
+    assert "passed {{ humanizePercentage $values.A.Value }} of its runs" in data
+    assert description.count("humanizePercentage") == 1
+
+
 def _runbook_anchors() -> set[str]:
     """GitHub's anchor for each heading: lowercased, punctuation dropped, spaces to dashes."""
     prose = re.sub(r"^```.*?^```", "", RUNBOOK.read_text(), flags=re.MULTILINE | re.DOTALL)

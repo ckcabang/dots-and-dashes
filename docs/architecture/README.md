@@ -23,6 +23,8 @@ Exactly three, each testing behaviour through a public interface:
 
 `make test` runs all three against a Compose stack of the checkout's own (see `README.md`).
 
+`tests/scripts` is not a seam either: it checks the helper scripts in `scripts/`, which never touch the app. The tests run each script on the host as a human or agent would, against throwaway git repos in `tmp_path`, so they need git and bash but no stack (`uv run pytest tests/scripts`). `make lint` runs shellcheck over the same scripts.
+
 ## Where it runs
 
 - **Local**: `docker compose up` (app + Postgres).

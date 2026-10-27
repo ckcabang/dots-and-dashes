@@ -51,6 +51,7 @@ test-down:
 # Ruff, and one Alembic head: two migrations off the same parent leave two heads.
 lint:
 	uv run ruff check
+	uv run shellcheck $$(grep -lE '^#!.*bash' scripts/* .githooks/*)
 	@test "$$(uv run alembic heads | wc -l)" -eq 1 || { uv run alembic heads; echo "More than one Alembic head: re-point a down_revision." >&2; exit 1; }
 
 typecheck:

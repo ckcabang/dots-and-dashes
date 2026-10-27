@@ -703,16 +703,28 @@ def test_a_resolved_notification_wakes_no_agent(tmp_path):
     assert outputs == {"kind": "resolved", "wake": "false"}
 
 
+AGENT = SCRIPTS / "agent.md"
+
+
 def test_the_agent_runs_as_the_on_call_agent_definition(tmp_path):
+    """agents.json is built from scripts/on-call/agent.md, a file Builders can
+    write (the sandbox masks .claude/ in worktrees)."""
     _, out = prepare(tmp_path, notification("firing", alert("Save latency (dev)")))
 
-    definition = (ROOT / ".claude" / "agents" / "on-call.md").read_text()
-    _, frontmatter, body = definition.split("---\n", 2)
-    (agent,) = json.loads((out / "agents.json").read_text()).values()
-    assert list(json.loads((out / "agents.json").read_text())) == ["on-call"]
-    assert agent["prompt"] == body.strip()
-    assert f"description: {agent['description']}" in frontmatter
-    assert agent["model"] == "opus"
+    _, _, body = AGENT.read_text().split("---\n", 2)
+    assert json.loads((out / "agents.json").read_text()) == {
+        "on-call": {
+            "description": (
+                "Responds to a production alert, diagnoses it from telemetry, applies one"
+                " of three fixed remedies, and files an incident issue. Use when a Grafana"
+                " alert fires."
+            ),
+            "prompt": body.strip(),
+            "model": "opus",
+            "tools": ["Read", "Grep", "Glob", "Bash"],
+        }
+    }
+    assert body.strip().startswith("You are the On-call agent.")
 
 
 WORKFLOWS = ROOT / ".github" / "workflows"

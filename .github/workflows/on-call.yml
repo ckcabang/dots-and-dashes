@@ -73,7 +73,7 @@ jobs:
             printf '%s' "${!name}" > "$RUNNER_TEMP/on-call-tokens/$name"
           done
 
-      # Claude Code as the On-call agent (.claude/agents/on-call.md), with the
+      # Claude Code as the On-call agent (scripts/on-call/agent.md), with the
       # tools below and no others: it reads Grafana and Fly through
       # scripts/on-call/grafana and scripts/on-call/fly, applies a remedy only
       # through scripts/on-call/remedy, and finds, reads and files incident

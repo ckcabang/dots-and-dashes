@@ -10,7 +10,7 @@ One Entry save on prod, followed through all three signals by one trace ID.
 
    ![p95 save latency exemplar with its trace ID](observability-1-exemplar.png)
 
-2. **The trace.** The same trace ID in Tempo: the `POST /entries` span, its `db.connection.checkout` and statement spans, and the attributes `entry.type`, `entry.text_length` and `entry.id`, with no Entry text.
+2. **The trace.** The same trace ID in Tempo: the save's root span (`POST /api/entries` for a canary save, `POST /entries` for one from the Daily Log), its `db.connection.checkout` and statement spans, and the attributes `entry.type`, `entry.text_length` and `entry.id`, with no Entry text.
 
    ![The save's trace in Tempo](observability-2-trace.png)
 
@@ -32,7 +32,7 @@ One Entry save on prod, followed through all three signals by one trace ID.
 
    ![The six alert rules in the Dots & Dashes folder](alert-rules.png)
 
-7. **An alert firing**: a rule in the Firing state, with its query over the threshold.
+7. **An alert firing**: a rule's state history showing its change from Normal to Firing during the live run on 2026-10-27.
 
    ![An alert firing](alert-firing.png)
 

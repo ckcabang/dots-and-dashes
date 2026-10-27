@@ -28,16 +28,9 @@ One Entry save on prod, followed through all three signals by one trace ID.
 
    ![The key journey dashboard](dashboard.png)
 
-6. **Each alert rule** ([`monitoring/alert-rules.json`](../../monitoring/alert-rules.json)), in Grafana's **Alerting → Alert rules**, folder **Dots & Dashes**:
+6. **The alert rules** ([`monitoring/alert-rules.json`](../../monitoring/alert-rules.json)): Grafana's **Alerting → Alert rules** list with the folder **Dots & Dashes** expanded, showing all six: Save failures, Save latency and Canary failing, each for prod and dev.
 
-   | Rule | Screenshot |
-   |---|---|
-   | Save failures (prod) | ![Save failures (prod)](alert-rule-save-failures-prod.png) |
-   | Save latency (prod) | ![Save latency (prod)](alert-rule-save-latency-prod.png) |
-   | Canary failing (prod) | ![Canary failing (prod)](alert-rule-canary-failing-prod.png) |
-   | Save failures (dev) | ![Save failures (dev)](alert-rule-save-failures-dev.png) |
-   | Save latency (dev) | ![Save latency (dev)](alert-rule-save-latency-dev.png) |
-   | Canary failing (dev) | ![Canary failing (dev)](alert-rule-canary-failing-dev.png) |
+   ![The six alert rules in the Dots & Dashes folder](alert-rules.png)
 
 7. **An alert firing**: a rule in the Firing state, with its query over the threshold.
 

@@ -2,6 +2,10 @@
 
 A personal, keyboard-first bullet journal web app, run like a production system: deployed to Fly.io, observable in Grafana Cloud, alerting on user impact, with an On-call agent that fixed three staged incidents itself during the live exercise. Its workflow is now disabled to save API cost ([On-call agent](#on-call-agent)).
 
+![Typing entries and completing tasks from the keyboard in Dots & Dashes](docs/demo.gif)
+
+Adding an Event and a Priority Task, then completing the day's Tasks with the keyboard.
+
 - **Prod:** <https://dots-and-dashes.fly.dev> (password login; there is no sign-up page, see [Users on a deployed app](#users-on-a-deployed-app))
 - **Dev:** <https://dots-and-dashes-dev.fly.dev>, always running `main`
 - **Tracker:** [GitHub Issues](https://github.com/ckcabang/dots-and-dashes/issues), starting from the spec, [#1](https://github.com/ckcabang/dots-and-dashes/issues/1)

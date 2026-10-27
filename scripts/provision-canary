@@ -230,7 +230,9 @@ EVIDENCE=()
 # stdin. Succeeds if it was created or already exists.
 create_canary() {
   local app="$1" out
-  if out=$(printf '%s\n' "$CANARY_PASSWORD" | flyctl ssh console -a "$app" \
+  # Killed after 2 minutes: if flyctl never hands the pipe to the Machine,
+  # create-user would wait on stdin forever. The caller then falls back to --pty.
+  if out=$(printf '%s\n' "$CANARY_PASSWORD" | with_timeout 120 flyctl ssh console -a "$app" \
       -C "/app/.venv/bin/dots-and-dashes create-user --canary --email $CANARY_EMAIL --timezone UTC --password-stdin" 2>&1); then
     say "$out"
     return 0
@@ -275,11 +277,95 @@ copy_file() {
 
 json_field() { python3 -c "import json,sys; print(json.load(sys.stdin)$1)"; }
 
+# with_timeout SECONDS CMD...: CMD, killed after SECONDS where `timeout` exists
+# (macOS has none by default: there it just runs).
+with_timeout() {
+  local seconds="$1"; shift
+  if command -v timeout >/dev/null 2>&1; then timeout "$seconds" "$@"; else "$@"; fi
+}
+
+# What the EXIT trap cleans up: the chaos secret a firing test has staged on
+# dev, the cookie jar, and the Grafana token's file.
+STAGED_SECRET=""
+JAR=""
+AUTH_FILE=""
+
+# cleanup runs on every exit, Ctrl-C and errors included, so a firing test
+# that stops early never leaves dev failing or slowing its saves.
+cleanup() {
+  if [[ -n "$STAGED_SECRET" ]]; then
+    warn "Unsetting $STAGED_SECRET on $DEV_APP, ending the staged incident."
+    flyctl secrets unset -a "$DEV_APP" "$STAGED_SECRET" \
+      || warn "Couldn't. Run it yourself: flyctl secrets unset -a $DEV_APP $STAGED_SECRET"
+    STAGED_SECRET=""
+  fi
+  rm -f "$JAR" "$AUTH_FILE"
+}
+
+# drive_saves: log 30 Entries on dev as its Canary User and delete each saved
+# one. A request that fails, or doesn't answer at all, counts as failed.
+drive_saves() {
+  local body id
+  saved=0 failed=0
+  JAR=$(mktemp)
+  printf '%s' "$CANARY_PASSWORD" | curl -s -o /dev/null -c "$JAR" --data-urlencode \
+    "email=$CANARY_EMAIL" --data-urlencode "password@-" "https://$DEV_APP.fly.dev/login" || true
+  for _ in $(seq 1 30); do
+    body=$(curl -s -b "$JAR" -H 'Content-Type: application/json' -d '{"text":"canary check"}' \
+      -w '\n%{http_code}' "https://$DEV_APP.fly.dev/api/entries" || true)
+    if [[ "${body##*$'\n'}" == 201 ]]; then
+      saved=$((saved + 1))
+      id=$(json_field '["id"]' <<<"${body%$'\n'*}" 2>/dev/null || true)
+      if [[ "$id" =~ ^[0-9]+$ ]]; then
+        curl -s -o /dev/null -b "$JAR" -X DELETE "https://$DEV_APP.fly.dev/api/entries/$id" || true
+      fi
+    else
+      failed=$((failed + 1))
+    fi
+  done
+  rm -f "$JAR"; JAR=""
+}
+
+# rule_state TITLE: the alert rule's state now (inactive, pending or firing).
+rule_state() {
+  grafana GET api/prometheus/grafana/api/v1/rules | RULE="$1" python3 -c '
+import json, os, sys
+for g in json.load(sys.stdin)["data"]["groups"]:
+    for r in g["rules"]:
+        if r["name"] == os.environ["RULE"]:
+            print(r["state"])' 2>/dev/null || true
+}
+
+# firing_test SECRET VALUE RULE: stage an incident on dev with the chaos
+# SECRET, drive saves, wait up to 10 minutes for RULE to fire, end it.
+firing_test() {
+  local secret="$1" value="$2" rule="$3" state="" fired_at=""
+  STAGED_SECRET="$secret"
+  flyctl secrets set -a "$DEV_APP" "$secret=$value"
+  drive_saves
+  say "Saves on dev: $saved saved, $failed failed."
+  say "Waiting for '$rule' to fire (it evaluates every minute, then holds 1m)…"
+  for _ in $(seq 1 20); do
+    state=$(rule_state "$rule")
+    note "  $rule: ${state:-unknown}"
+    if [[ "$state" == firing ]]; then fired_at=$(date -u +%FT%TZ); break; fi
+    sleep 30
+  done
+  EVIDENCE+=("Firing test on dev, $secret=$value: $saved saved, $failed failed; '$rule' state: ${state:-unknown}${fired_at:+ at $fired_at}")
+  say "Ending the staged incident."
+  flyctl secrets unset -a "$DEV_APP" "$secret"
+  STAGED_SECRET=""
+}
+
 run_wizard() {
 
 cd "$(dirname "$0")/.."
 
-TOTAL_STAGES=9
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+TOTAL_STAGES=10
 
 banner "The canary and the user-impact alerts"
 
@@ -356,21 +442,35 @@ note "and say so on the PR; the script needs a secret source to read the passwor
 pause "Saved? Press Enter"
 
 stage "Create the canary check"
-open_url "$GRAFANA_URL/$SM_PATH/checks/new/scripted"
-step "This is Synthetics → Checks → Create new check → Scripted."
-step "Job name: $CANARY_JOB (the alert and dashboard select on it)."
-step "Target / instance: https://$APP.fly.dev"
-if copy_file monitoring/canary.js; then
-  step "Script: replace the example with monitoring/canary.js, now on your clipboard."
+existing_check=$(_existing CANARY_CHECK_ID || true)
+if [[ -n "$existing_check" ]] && confirm "Check $existing_check exists from a past run. Keep it, updating its script?"; then
+  # One check only: a second would double the canary's saves and its quota.
+  CANARY_CHECK_ID=$existing_check
+  open_url "$GRAFANA_URL/$SM_PATH/checks/$CANARY_CHECK_ID/edit"
+  if copy_file monitoring/canary.js; then
+    step "Replace its script with monitoring/canary.js, now on your clipboard."
+  else
+    step "Replace its script with the whole of monitoring/canary.js."
+  fi
+  step "Check it still runs every minute as job $CANARY_JOB, then save."
+  pause "Saved? Press Enter"
 else
-  step "Script: replace the example with the whole of monitoring/canary.js."
+  open_url "$GRAFANA_URL/$SM_PATH/checks/new/scripted"
+  step "This is Synthetics → Checks → Create new check → Scripted."
+  step "Job name: $CANARY_JOB (the alert and dashboard select on it)."
+  step "Target / instance: https://$APP.fly.dev"
+  if copy_file monitoring/canary.js; then
+    step "Script: replace the example with monitoring/canary.js, now on your clipboard."
+  else
+    step "Script: replace the example with the whole of monitoring/canary.js."
+  fi
+  step "Probe locations: one, the nearest to Fly's iad (e.g. North Virginia)."
+  step "Frequency: 1 minute. If the form has a Test button, run it: it should pass."
+  step "Save the check. Its page's URL ends in /checks/<id>."
+  note "Field names here are from the Synthetic Monitoring app's code; the form's"
+  note "layout may differ. Each run counts against your plan's execution quota."
+  ask CANARY_CHECK_ID "The check's ID (the number at the end of its URL):"
 fi
-step "Probe locations: one, the nearest to Fly's iad (e.g. North Virginia)."
-step "Frequency: 1 minute. If the form has a Test button, run it: it should pass."
-step "Save the check. Its page's URL ends in /checks/<id>."
-note "Field names here are from the Synthetic Monitoring app's code; the form's"
-note "layout may differ. Each run counts against your plan's execution quota."
-ask CANARY_CHECK_ID "The check's ID (the number at the end of its URL):"
 write_env CANARY_CHECK_ID "$CANARY_CHECK_ID"
 EVIDENCE+=("Synthetic Monitoring check $CANARY_CHECK_ID: $GRAFANA_URL/$SM_PATH/checks/$CANARY_CHECK_ID")
 
@@ -383,7 +483,6 @@ note "Admin, because the alert provisioning API needs it. Delete the token after
 ask_secret GRAFANA_TOKEN "Service account token (hidden):"
 AUTH_FILE=$(mktemp)
 chmod 600 "$AUTH_FILE"
-trap 'rm -f "$AUTH_FILE"' EXIT
 printf 'Authorization: Bearer %s\n' "$GRAFANA_TOKEN" > "$AUTH_FILE"
 unset GRAFANA_TOKEN
 code=$(grafana GET api/folders -o /dev/null -w '%{http_code}')
@@ -437,50 +536,28 @@ note "Where alerts are sent (the On-call contact point) is issue #22's; until th
 note "they show under Alerting → Alert rules, and in the default contact point."
 pause
 
-stage "Firing test: stage save failures on dev"
+stage "Firing test: save failures on dev"
 say "Sets CHAOS_SAVE_ERROR_RATE=0.5 on $DEV_APP (it restarts), saves 30 Entries"
 say "there as the Canary User, waits for 'Save failures (dev)' to fire, then unsets"
 say "the switch (another restart). Needs the Canary User on dev from stage 4."
-if [[ "$(login_status "https://$DEV_APP.fly.dev")" != 303 ]]; then
-  warn "The Canary User can't log in to dev, so the firing test is skipped."
-  EVIDENCE+=("Firing test: skipped (no Canary User on dev)")
+note "If the wizard stops partway, Ctrl-C included, it unsets the switch on its way out."
+dev_canary=no
+if [[ "$(login_status "https://$DEV_APP.fly.dev" || true)" == 303 ]]; then dev_canary=yes; fi
+if [[ "$dev_canary" != yes ]]; then
+  warn "The Canary User can't log in to dev, so the firing tests are skipped."
+  EVIDENCE+=("Firing tests: skipped (no Canary User on dev)")
 elif confirm "Stage it now? It takes about five minutes."; then
-  flyctl secrets set -a "$DEV_APP" CHAOS_SAVE_ERROR_RATE=0.5
-  jar=$(mktemp)
-  printf '%s' "$CANARY_PASSWORD" | curl -s -o /dev/null -c "$jar" \
-    --data-urlencode "email=$CANARY_EMAIL" --data-urlencode "password@-" "https://$DEV_APP.fly.dev/login"
-  saved=0 failed=0
-  for _ in $(seq 1 30); do
-    body=$(curl -s -b "$jar" -H 'Content-Type: application/json' -d '{"text":"canary check"}' \
-      -w '\n%{http_code}' "https://$DEV_APP.fly.dev/api/entries")
-    if [[ "${body##*$'\n'}" == 201 ]]; then
-      saved=$((saved + 1))
-      id=$(json_field '["id"]' <<<"${body%$'\n'*}")
-      curl -s -o /dev/null -b "$jar" -X DELETE "https://$DEV_APP.fly.dev/api/entries/$id"
-    else
-      failed=$((failed + 1))
-    fi
-  done
-  rm -f "$jar"
-  say "Saves on dev: $saved saved, $failed failed."
-  say "Waiting for the rule to fire (it evaluates every minute, then holds 1m)…"
-  state=""
-  for _ in $(seq 1 20); do
-    state=$(grafana GET api/prometheus/grafana/api/v1/rules | python3 -c '
-import json, sys
-for g in json.load(sys.stdin)["data"]["groups"]:
-    for r in g["rules"]:
-        if r["name"] == "Save failures (dev)":
-            print(r["state"])' 2>/dev/null || true)
-    note "  Save failures (dev): ${state:-unknown}"
-    [[ "$state" == firing ]] && break
-    sleep 30
-  done
-  EVIDENCE+=("Firing test on dev: $saved saved, $failed failed; 'Save failures (dev)' state: ${state:-unknown} at $(date -u +%FT%TZ)")
-  say "Ending the staged incident."
-  flyctl secrets unset -a "$DEV_APP" CHAOS_SAVE_ERROR_RATE
+  firing_test CHAOS_SAVE_ERROR_RATE 0.5 "Save failures (dev)"
+fi
+pause
+
+stage "Firing test: save latency on dev"
+say "Sets CHAOS_SAVE_LATENCY_MS=1500 on $DEV_APP, so every save takes over 1.5s,"
+say "saves 30 Entries, waits for 'Save latency (dev)' to fire, then unsets it."
+if [[ "$dev_canary" == yes ]] && confirm "Stage it now? It takes about five minutes."; then
+  firing_test CHAOS_SAVE_LATENCY_MS 1500 "Save latency (dev)"
   open_url "$GRAFANA_URL/alerting/list"
-  step "If it fired, the alert rule list shows it; it resolves within ~10 minutes."
+  step "Both dev alerts show under Alerting → Alert rules; they resolve within ~10 minutes."
 fi
 pause
 

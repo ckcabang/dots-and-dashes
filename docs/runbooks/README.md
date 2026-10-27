@@ -51,7 +51,7 @@ Every notification carries the environment, the image, a link to the dashboard f
 
 ## The On-call agent
 
-When an alert fires, the On-call agent (`.claude/agents/on-call.md`) wakes in GitHub Actions, diagnoses from telemetry and applies only the three remedies below (ADR-0002). Anything else goes to the human through an incident issue labelled `ready-for-human`. `scripts/provision-oncall` sets up everything in this section and prints the evidence, read back from each service.
+When an alert fires, the On-call agent (its prompt is `scripts/on-call/agent.md`) wakes in GitHub Actions, diagnoses from telemetry and applies only the three remedies below (ADR-0002). Anything else goes to the human through an incident issue labelled `ready-for-human`. `scripts/provision-oncall` sets up everything in this section and prints the evidence, read back from each service.
 
 **The bridge: a custom payload on the contact point.** GitHub's `repository_dispatch` API takes `{"event_type", "client_payload"}` and a token; Grafana's webhook sends its own shape. So the Grafana contact point `dots-and-dashes-on-call` is a webhook whose custom payload, `monitoring/on-call-payload.tmpl`, rewrites each notification into that body, and it POSTs it straight to `https://api.github.com/repos/ckcabang/dots-and-dashes/dispatches`. Nothing else is hosted. The event type is `grafana-alert`, which starts `.github/workflows/on-call.yml`; `client_payload` holds the notification's status, labels, annotations (`environment`, `image`, `dashboard_url`, `runbook_url`) and each alert.
 

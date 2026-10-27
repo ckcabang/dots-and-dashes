@@ -19,8 +19,9 @@ set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
 # A pending merge is a directory: target, head, tree and branch hold one line
-# each, message the whole message, conflicted the conflicted paths, and
-# untracked the NUL-separated untracked files from before the merge started.
+# each, message the whole message, and three hold NUL-separated paths:
+# conflicted the conflicted files, untracked the untracked files from before
+# the merge started, and dirs the directories the merge creates, deepest first.
 # written appears once the merged files are in the worktree.
 state=$(git rev-parse --git-path sync-worktree-merge)
 
@@ -42,12 +43,17 @@ fi
 
 if [[ ${1:-} == --abort ]]; then
     # Back to the recorded HEAD: the files the merge changed or deleted come
-    # back from it, and the ones it added go.
+    # back from it, and the ones it added go, then the directories it made for
+    # them, unless something else is in them now.
     git reset -q --mixed "$head"
     skip_claude
     git diff -z --name-only -- . ':!.claude' | xargs -0 -r git --literal-pathspecs checkout --
     git diff -z --name-only --no-renames --diff-filter=A "$head" "$tree" -- . ':!.claude' \
         | xargs -0 -r rm -f --
+    mapfile -d '' -t dirs < "$state/dirs"
+    for dir in "${dirs[@]}"; do
+        rmdir -- "$dir" 2>/dev/null || true
+    done
     rm -rf "$state"
     echo "Aborted merging $branch; back at $(git rev-parse --short HEAD)."
     exit 0
@@ -62,7 +68,7 @@ if [[ ${1:-} == --continue ]]; then
         echo "sync-worktree: the merge stopped before writing its files; run --abort, then start it again." >&2
         exit 1
     }
-    mapfile -t files < "$state/conflicted"
+    mapfile -d '' -t files < "$state/conflicted"
     if git --literal-pathspecs grep --no-index -nE '^(<<<<<<<|>>>>>>>)( |$)' -- "${files[@]}" >&2; then
         echo "sync-worktree: conflict markers remain; resolve them, then re-run --continue." >&2
         exit 1
@@ -93,43 +99,49 @@ if git diff --quiet HEAD..."$branch" -- .claude; then
     exec git merge --no-ff --no-edit -m "$message" "$branch"
 fi
 
-git diff --quiet HEAD -- . ':!.claude' && git diff --cached --quiet || {
+if ! { git diff --quiet HEAD -- . ':!.claude' && git diff --cached --quiet; }; then
     echo "sync-worktree: commit or set aside your changes first." >&2
     exit 1
-}
+fi
 
 before=$(git rev-parse HEAD)
 target=$(git rev-parse "$branch^{commit}")
+# The merged tree comes first, conflicted files keeping their markers, then on
+# a conflict (exit 1) the conflicted paths up to an empty field, all
+# NUL-terminated. Without -z git C-quotes unusual names ("caf\303\251.txt"),
+# which then match neither .claude/ nor any file.
+merge=$(mktemp)
+trap 'rm -f "$merge"' EXIT
+status=0
+git merge-tree --write-tree --name-only -z HEAD "$target" > "$merge" || status=$?
+(( status <= 1 )) || exit "$status"
+mapfile -d '' -t fields < "$merge"
+tree=${fields[0]}
 conflicted=()
-if ! out=$(git merge-tree --write-tree --name-only HEAD "$target"); then
-    # The first line is the merged tree, conflicted files keeping their markers;
-    # the conflicted paths follow, up to a blank line.
-    mapfile -t lines <<< "$out"
-    tree=${lines[0]}
-    for line in "${lines[@]:1}"; do
-        [[ -n $line ]] || break
-        conflicted+=("$line")
+if (( status )); then
+    for path in "${fields[@]:1}"; do
+        [[ -n $path ]] || break
+        conflicted+=("$path")
     done
-    claude=$(printf '%s\n' "${conflicted[@]}" | grep '^\.claude/' || true)
-    if [[ -n $claude ]]; then
+    for path in "${conflicted[@]}"; do
+        [[ $path == .claude/* ]] || continue
         echo "sync-worktree: merging $branch conflicts inside .claude/, which is masked" >&2
         echo "here; merge it in the main checkout instead. Nothing changed. Conflicts:" >&2
-        printf '%s\n' "${conflicted[@]}" >&2
+        printf '  %s\n' "${conflicted[@]}" >&2
         exit 1
-    fi
-else
-    tree=$out
+    done
 fi
 
 # Writing the merged tree would overwrite an untracked file where the branch
 # adds one; refuse, as `git merge` does.
 mapfile -d '' -t added < <(git diff -z --name-only --no-renames --diff-filter=A "$before" "$tree" -- . ':!.claude')
 if (( ${#added[@]} )); then
-    clobbered=$(git --literal-pathspecs ls-files -o --exclude-standard -- "${added[@]}")
-    if [[ -n $clobbered ]]; then
+    mapfile -d '' -t clobbered < <(
+        git --literal-pathspecs ls-files -z -o --exclude-standard -- "${added[@]}")
+    if (( ${#clobbered[@]} )); then
         echo "sync-worktree: merging $branch would overwrite these untracked files; move" >&2
         echo "or remove them first. Nothing changed." >&2
-        sed 's/^/  /' <<< "$clobbered" >&2
+        printf '  %s\n' "${clobbered[@]}" >&2
         exit 1
     fi
 fi
@@ -142,8 +154,14 @@ if (( ${#conflicted[@]} )); then
     printf '%s\n' "$tree" > "$state/tree"
     printf '%s\n' "$branch" > "$state/branch"
     printf '%s\n' "$message" > "$state/message"
-    printf '%s\n' "${conflicted[@]}" > "$state/conflicted"
+    printf '%s\0' "${conflicted[@]}" > "$state/conflicted"
     git ls-files -z -o --exclude-standard -- . ':!.claude' > "$state/untracked"
+    for path in "${added[@]}"; do
+        while [[ $path == */* ]]; do
+            path=${path%/*}
+            [[ -e $path ]] || printf '%s\0' "$path"
+        done
+    done | sort -z -u -r > "$state/dirs"
 fi
 
 # Bring the index and the working tree up to the merged tree, outside the masked

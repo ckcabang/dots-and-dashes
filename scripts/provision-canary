@@ -111,7 +111,7 @@ ask() {
   current=$(_existing "$key" || true)
   # Readline needs the colour codes wrapped in \001..\002 to place the cursor.
   p="  $s$BOLD$e$prompt$s$RESET$e "
-  [[ -n "$current" ]] && p+="$s$DIM$e[Enter keeps current]$s$RESET$e "
+  [[ -n "$current" ]] && p+="$s$DIM${e}[Enter keeps current]$s$RESET$e "
   read -e -r -p "$p" input || rc=1
   if (( rc )) && [[ -z "$input" ]]; then return 1; fi
   [[ -z "$input" && -n "$current" ]] && input="$current"
@@ -152,6 +152,7 @@ write_env() {
 
 # set_secret NAME VALUE sets a GitHub Actions repo secret via gh. Falls back
 # to a warning (and records it) if gh is unavailable or unauthenticated.
+# shellcheck disable=SC2329 # library function this wizard doesn't call
 set_secret() {
   local name="$1" value="$2"
   if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
@@ -166,6 +167,7 @@ set_secret() {
 }
 
 # set_var NAME VALUE sets a GitHub Actions repo variable (non-secret).
+# shellcheck disable=SC2329 # library function this wizard doesn't call
 set_var() {
   local name="$1" value="$2"
   if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
@@ -223,7 +225,7 @@ CANARY_EMAIL=canary@dots-and-dashes.invalid
 CANARY_JOB_PROD=dots-and-dashes-canary-prod
 CANARY_JOB_DEV=dots-and-dashes-canary-dev
 FOLDER_UID=dots-and-dashes
-RULE_GROUP=key-journey
+RULE_GROUP="key-journey"
 SM_PATH=a/grafana-synthetic-monitoring-app
 EVIDENCE=()
 
@@ -368,6 +370,7 @@ AUTH_FILE=""
 
 # cleanup runs on every exit, Ctrl-C and errors included, so a firing test
 # that stops early never leaves dev failing or slowing its saves.
+# shellcheck disable=SC2329 # run_wizard runs it: trap cleanup EXIT
 cleanup() {
   trap '' INT TERM   # a second Ctrl-C mustn't cut the clean-up short
   if [[ -n "$STAGED_SECRET" ]]; then

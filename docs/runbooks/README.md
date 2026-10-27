@@ -30,7 +30,7 @@ The two save alerts read the save metrics, as Grafana Cloud's Prometheus names t
 histogram_quantile(0.95, sum by (le, image) (rate(entry_save_duration_seconds_bucket{job="prod/dots-and-dashes", outcome=~"saved|failed"}[10m])))
 ```
 
-To watch a staged incident on dev, run the same queries with `job="dev/dots-and-dashes"`, or pick `dev` on the dashboard. A failed save's span and its `Entry save failed` log share a trace ID and carry `error.type`; the latency histogram's exemplars link to slow traces.
+To watch a staged incident on dev, run the same queries with `job="dev/dots-and-dashes"`, or pick `dev` on the dashboard. A failed save's span and its `Entry save failed` log share a trace ID and carry `error.type`; the latency histogram's exemplars carry slow saves' trace IDs.
 
 Every notification carries the environment, the image, a link to the dashboard filtered to both, the alert's panel (Grafana's own panel link) and this runbook's section for it.
 
@@ -42,7 +42,7 @@ Every notification carries the environment, the image, a link to the dashboard f
 ## Alert: Save latency
 
 - **Means**: the p95 Entry save took over 1s over the last 10 minutes.
-- **First look**: an exemplar on the **p95 save latency** panel opens a slow save's trace. Time in a long `db.connection.checkout` span is an [exhausted pool](#db-connection-pool-exhausted--raise-the-pool-size-and-redeploy).
+- **First look**: an exemplar on the **p95 save latency** panel shows a slow save's `trace_id` in its tooltip; open that trace in Explore → Tempo (the tooltip has no link to it yet, #104). Time in a long `db.connection.checkout` span is an [exhausted pool](#db-connection-pool-exhausted--raise-the-pool-size-and-redeploy).
 
 ## Alert: Canary failing
 

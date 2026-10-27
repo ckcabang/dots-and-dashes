@@ -205,6 +205,8 @@ Pause it whenever you aren't staging an incident on dev. Dev's canary rule treat
 
 To resume it, before staging an incident, do the same and turn **Enabled** back on. The next run wakes dev, and may time out once on the cold start.
 
+**Dev's Postgres cold start.** A stopped `dots-and-dashes-dev-db` starts when the dev app, or a release command, connects through Flycast, but it refuses connections for its first seconds: Fly's proxy logs `instance refused connection … 0.0.0.0:5432` until Postgres listens, then Postgres answers `FATAL: the database system is starting up` until it has recovered. The app and `dots-and-dashes migrate` wait that out (#95): a new connection refused that way is retried with backoff, from 0.1s doubling to 2s, for up to 15s (`COLD_START_SECONDS` in `persistence.py`), and only then fails the request or the release. Each retry writes a `Postgres refused a connection (OperationalError), as on a cold start` warning to the Machine's logs. Any other connection error, such as a wrong password, fails at once. So a cold start shows as one slow request or a slower deploy, not as 500s: a login that still fails with `psycopg.OperationalError` on its `db.connection.checkout` span means dev-db took longer than 15s to start, or isn't starting at all. Check `flyctl status -a dots-and-dashes-dev-db` and `flyctl logs -a dots-and-dashes-dev-db --no-tail`.
+
 The field names follow the Synthetic Monitoring app as `scripts/provision-canary` describes it; the form's layout may differ.
 
 ### Shut down after grading

@@ -8,7 +8,9 @@ Grafana's test notification (its TestAlert) and a resolved notification don't.
 Writes `kind` (firing, test or resolved) and `wake` (true or false) to
 $GITHUB_OUTPUT, and into the out dir the agent's prompt (prompt.md, the
 notification quoted as data) and its definition (agents.json, from
-.claude/agents/on-call.md, for `claude --agents`).
+scripts/on-call/agent.md, for `claude --agents`). The definition lives
+outside .claude/ so a Builder in a worktree can edit it; .claude/agents/on-call.md
+keeps the same frontmatter and points its body here.
 """
 
 import json
@@ -18,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
-DEFINITION = ROOT / ".claude" / "agents" / "on-call.md"
+DEFINITION = ROOT / "scripts" / "on-call" / "agent.md"
 TEST_ALERT = "TestAlert"
 
 

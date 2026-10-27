@@ -69,7 +69,24 @@ if [[ ${1:-} == --continue ]]; then
         echo "sync-worktree: the merge stopped before writing its files; run --abort, then start it again." >&2
         exit 1
     }
-    mapfile -d '' -t files < "$state/conflicted"
+    # Before NUL-separated paths, the script wrote one per line, and the merge
+    # may have been started by it.
+    if [[ $(tail -c1 "$state/conflicted" | od -An -tx1 | tr -d ' ') == 0a ]]; then
+        mapfile -t files < "$state/conflicted"
+    else
+        mapfile -d '' -t files < "$state/conflicted"
+    fi
+    # git grep skips a path that isn't there, so a missing one would pass.
+    missing=()
+    for file in "${files[@]}"; do
+        [[ -e $file ]] || missing+=("$file")
+    done
+    if (( ${#missing[@]} )); then
+        echo "sync-worktree: these conflicted files are gone, so their markers can't be" >&2
+        echo "checked; put them back resolved, or back out with --abort:" >&2
+        printf '  %s\n' "${missing[@]}" >&2
+        exit 1
+    fi
     if git --literal-pathspecs grep --no-index -nE '^(<<<<<<<|>>>>>>>)( |$)' -- "${files[@]}" >&2; then
         echo "sync-worktree: conflict markers remain; resolve them, then re-run --continue." >&2
         exit 1

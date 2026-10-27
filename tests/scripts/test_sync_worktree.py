@@ -112,8 +112,11 @@ class Worktree:
     def read(self, name: str) -> str:
         return (self.path / name).read_text()
 
+    def state(self) -> Path:
+        return self.path / self.git("rev-parse", "--git-path", "sync-worktree-merge")
+
     def pending(self) -> bool:
-        return (self.path / self.git("rev-parse", "--git-path", "sync-worktree-merge")).exists()
+        return self.state().exists()
 
     def assert_unchanged(self) -> None:
         """HEAD, the index and the files are where they were before the merge."""
@@ -461,3 +464,40 @@ def test_continue_and_abort_need_a_pending_merge(
 
     assert result.returncode == 1
     assert "no merge is pending" in result.stderr
+
+
+def test_continue_reads_a_merge_the_old_format_recorded(
+    tmp_path: Path, git_env: dict[str, str]
+) -> None:
+    # Before this format, the script recorded the conflicted paths one per line.
+    # A merge it started may be finished by the script that replaced it.
+    wt = conflicted(tmp_path, git_env)
+    wt.sync("main")
+    (wt.state() / "conflicted").write_text("app.py\n")
+
+    refused = wt.sync("--continue")
+
+    assert refused.returncode == 1
+    assert "conflict markers remain" in refused.stderr
+    assert wt.head() == wt.before
+
+    write(wt.path, RESOLVED)
+    result = wt.sync("--continue")
+    assert result.returncode == 0, result.stderr
+    wt.assert_merged()
+
+
+def test_continue_refuses_when_a_conflicted_file_is_gone(
+    tmp_path: Path, git_env: dict[str, str]
+) -> None:
+    # Its markers can't be checked, so --continue can't tell it was resolved.
+    wt = conflicted(tmp_path, git_env)
+    wt.sync("main")
+    (wt.path / "app.py").unlink()
+
+    refused = wt.sync("--continue")
+
+    assert refused.returncode == 1
+    assert "  app.py" in refused.stderr.splitlines()
+    assert wt.head() == wt.before
+    assert wt.pending()

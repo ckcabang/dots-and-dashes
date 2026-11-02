@@ -22,7 +22,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: astral-sh/setup-uv@v10.3.2  # publishes no floating major tag
+      - uses: astral-sh/setup-uv@v10.3.3  # publishes no floating major tag
 
       # The lockfile pins Playwright, and so the Chromium build it downloads.
       - name: Cache Playwright's browsers

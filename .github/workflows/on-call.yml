@@ -125,7 +125,7 @@ jobs:
 
       - name: Keep the agent's transcript
         if: always() && steps.notification.outputs.wake == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: on-call-transcript
           path: ${{ runner.temp }}/on-call/transcript.jsonl

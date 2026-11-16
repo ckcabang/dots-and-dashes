@@ -57,7 +57,7 @@ jobs:
       - name: Typecheck and test
         run: make check
 
-      - uses: grafana/setup-k6-action@v1.2.2
+      - uses: grafana/setup-k6-action@v1.3.0
         with:
           k6-version: 2.3.0
 
